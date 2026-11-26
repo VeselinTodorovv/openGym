@@ -15,10 +15,10 @@ import { autoGymHere } from './lib/gym-auto.js'
 import { withDayApart } from './lib/day-sessions.js'
 import { isoRun } from './lib/bidi.js'
 import { fmtDate, fmtClock, fmtDateRange, fmtNum, fmtPlate, exerciseNameText, fmtVol, fmtWeight, fmtDur, durPart, todayISO, isoOf, uid, exCount, routineCount, setsWorkCount, DAYN, DAYS, weekOrder, weekStartOf, weekKey, weekDayOffset, MONTHS_LONG, ACCENTS } from './lib/format.js'
-import { fmtSec, lastEntryFor, bestWeightFor, bestWeightForEntry, buildSets, effectiveRoutineIds, workoutDay, workoutVolume, sessionVolume, countsWarmups, setsDone, setsDoneActive, setUnitsTotal, lastBW, sessionSections, setLabel, defaultConfig, pickedExerciseConfig, cleanupSg, modeOf, effortOf, EFFORT, capEffort, stepEffort, isBw, isPerSide, sideReps, workSetsDone, applyIntensifierPlan, MAX_PLANNED_WARMUPS, NOTE_MAX, exLine } from './lib/history.js'
+import { fmtSec, lastEntryFor, bestWeightFor, bestWeightForEntry, buildSets, effectiveRoutineIds, workoutDay, workoutVolume, sessionVolume, countsWarmups, setsDone, setsDoneActive, setUnitsTotal, lastBW, sessionSections, setLabel, defaultConfig, pickedExerciseConfig, cleanupSg, modeOf, effortOf, EFFORT, capEffort, stepEffort, isBw, isPerSide, sideReps, workSetsDone, applyIntensifierPlan, MAX_PLANNED_WARMUPS, NOTE_MAX, exLine, barFloor } from './lib/history.js'
 import { usesBar, hasBarOverride, isNoBar, barTypeWeight, ownBarDefault, barPicks, withBarDefault, withStandardBars, defaultBarWeight, BAR_TYPES } from './lib/bar.js'
-import { plateSizesFor, isPlateSize, isStandardPlate, withoutPlateSize, DEFAULT_PAIRS, pairsOf, ownsPlates, withPlatePairs, withStandardPlates, withLoadKind, loadKindFor, baseWeightFor, dropGrid } from './lib/plates.js'
-import { toScale, rirOf, EFFORT_PRESETS, effortColor } from './lib/effort.js'
+import { plateSizesFor, isPlateSize, isStandardPlate, withoutPlateSize, DEFAULT_PAIRS, pairsOf, ownsPlates, withPlatePairs, withStandardPlates, withLoadKind, loadKindFor, baseWeightFor, dropGrid, backoffGrid } from './lib/plates.js'
+import { toScale, rirOf, displayScale, EFFORT_PRESETS, effortColor } from './lib/effort.js'
 import { beep, vibrate } from './lib/sound.js'
 import { t, tn, dateLocale, instrFor, instrTranslated, descFor, exerciseNameFor, exerciseNameClass, getLang, useLang } from './lib/i18n.js'
 import { nameIn, said } from './lib/a11y-name.js'
@@ -83,7 +83,7 @@ import { exerciseHistory } from './lib/exercise-history.js'
 import { relativeSeries } from './lib/relative-strength.js'
 import { isBellEx, dbLoadOf, dbLoadFor, withDbLoad, entryDbLoad, currentDbLoad, isOneArm, dumbbellsOf, ownsDumbbells, withDumbbells, ownsNoDumbbells, withNoDumbbells, presetWeights, cleanWeights, canHaveStack, stackOf, withStack, stackFromStep, parseWeightList } from './lib/dumbbells.js'
 import { nextStep } from './lib/weight-step.js'
-import { policyFor, profileRule, defaultIncrement, POLICIES_FOR, POLICY_NAME, POLICY_DESC, MAX_BW_SETS, MAX_TRIPLE_SETS, DENSITY_FLOOR, dupReps } from './lib/progression.js'
+import { policyFor, profileRule, defaultIncrement, POLICIES_FOR, POLICY_NAME, POLICY_DESC, MAX_BW_SETS, MAX_TRIPLE_SETS, DENSITY_FLOOR, dupReps, RPT_DEFAULT_PCT, RPT_DEFAULT_MODE, RPT_DEFAULT_MIN_RIR, rptBackoffPctOf, rptBackoffModeOf, rptTopMinRirOf, rptRowWeights } from './lib/progression.js'
 import { normalizeRepRange } from './lib/rep-range.js'
 import { isBackoff, backoffWeights } from './lib/backoff.js'
 import { isPyramid, normalizePyramid, normalizePyramidRest, normalizePyramidWeight, pyramidFromFlat, flatFromPyramid, pyramidLabel, PYRAMID_MAX, MAX_PYRAMID_SETS, PYRAMID_PRESETS } from './lib/pyramid.js'
@@ -2385,24 +2385,30 @@ const progressionStepIsValid = (step, policy, backoff = false, weightless = fals
   weightless || (policy === 'off' && !backoff) || (Number.isFinite(step) && step > 0)
 const weightlessOf = (c, mode, bw) => mode === 'reps' && bw && !(Number(c.weight) > 0)
 // Back-off sets (lib/backoff.js) are offered where there is a load to step down: rep work on a
-// loaded exercise, not a pyramid (it owns each set), not a rest-pause (one work set), not an
-// assistance machine (less load is harder there).
-const backoffOffered = (c, mode, ex, bw) => mode === 'reps' && !bw && !isAssisted({ ...c, id: ex.id })
+// loaded exercise, not a pyramid (it owns each set), not a rest-pause (one work set), not `rpt`
+// (which runs its own percentage back-off sets), and not an assistance machine.
+const backoffOffered = (c, mode, ex, bw, activePolicy) => mode === 'reps' && !bw && !isAssisted({ ...c, id: ex.id })
+  && activePolicy !== 'rpt' && c.prog !== 'rpt'
   && !(Array.isArray(c.pyramid) && c.pyramid.length) && c.intensifier?.type !== 'restpause'
 
-// Double and triple progression both climb a rep range (`repsMin`..`reps`), so the sheet keeps it
-// normalised for either.
-const climbsRange = policy => policy === 'double' || policy === 'steady' || policy === 'triple'
+// Double, steady, triple and RPT all climb a rep range (`repsMin`..`reps`), so the sheet keeps it
+// normalised for any of them.
+const climbsRange = policy => policy === 'double' || policy === 'steady' || policy === 'triple' || policy === 'rpt'
 // Triple progression's set ceiling while it is being edited: never below the starting sets.
 const setsMaxOf = c => Math.max(Math.max(1, Math.round(c.sets) || 1), Math.min(MAX_TRIPLE_SETS, Math.round(c.setsMax) || 0))
 
-function ProgressionFields({ ex, mode, c, setC, routine, unit, perSide, bw, fallback, freestyle }) {
+function ProgressionFields({ st, ex, mode, c, setC, routine, unit, perSide, bw, fallback, freestyle }) {
   // Triple progression adds sets and then load. Bodyweight work with nothing added already climbs
   // reps and then sets on its own (the rep ceiling below), and has no load to finish the cycle
   // with, so it is not offered there.
-  // Undulating days and shorter rests move a load too, so the same holds for them.
-  const LOADED_ONLY = ['triple', 'undulating', 'density']
-  const options = (POLICIES_FOR[mode] || ['off']).filter(p => !LOADED_ONLY.includes(p) || !bw || c.weight > 0 || c.prog === p)
+  // RPT, undulating days and shorter rests move a load too, so the same holds for them; RPT is
+  // also left out on assisted machines, where lighter stack numbers mean harder sets.
+  const LOADED_ONLY = ['triple', 'rpt', 'undulating', 'density']
+  const assisted = isAssisted({ ...c, id: ex.id })
+  const options = (POLICIES_FOR[mode] || ['off']).filter(p =>
+    (!LOADED_ONLY.includes(p) || !bw || c.weight > 0 || c.prog === p)
+    && (p !== 'rpt' || !assisted || c.prog === 'rpt')
+  )
   if (options.length < 2) return null
   const inherited = policyFor({ id: ex.id }, routine, mode, fallback)
   // Freestyle has no routine to follow (#910). An exercise added there opens at what you did last
@@ -2412,7 +2418,7 @@ function ProgressionFields({ ex, mode, c, setC, routine, unit, perSide, bw, fall
   // (Workout.jsx openProgressionSettings). It said "Follow the routine (Linear progression)".
   const active = freestyle === 'add' || (freestyle && !c.prog) ? 'off' : policyFor({ ...c, id: ex.id }, routine, mode, fallback)
   const inc = progressionStepOf(c, mode, ex, unit)
-  const canBackoff = backoffOffered(c, mode, ex, bw)
+  const canBackoff = backoffOffered(c, mode, ex, bw, active)
   const backoff = canBackoff && c.backoff === true
   const weightless = weightlessOf(c, mode, bw)
   const invalid = !progressionStepIsValid(inc, active, backoff, weightless)
@@ -2420,6 +2426,19 @@ function ProgressionFields({ ex, mode, c, setC, routine, unit, perSide, bw, fall
   const preview = backoff && c.weight > 0 && inc > 0
     ? backoffWeights(c.weight, Math.max(1, Math.round(c.sets) || 1), inc).map(fmtNum).join(' → ') + ' ' + unit
     : ''
+  const rptPct = rptBackoffPctOf(c)
+  const rptMode = rptBackoffModeOf(c)
+  const rptMinRir = rptTopMinRirOf(c)
+  const effScale = displayScale(st)
+  const effOff = effortOf(st) === 'none'
+  const rptRows = active === 'rpt' && mode === 'reps' && !weightless && !assisted && c.weight > 0 && inc > 0
+    ? rptRowWeights(c.weight, Math.max(1, Math.round(c.sets) || 1), c, {
+      grid: backoffGrid(st, { ...c, id: ex.id, inc }),
+      floor: barFloor(st, ex.id),
+      assisted,
+    })
+    : null
+  const rptPreview = rptRows ? rptRows.map(fmtNum).join(' → ') + ' ' + unit : ''
   const stride = mode === 'reps' && perSide ? 2 : 1
   const range = climbsRange(active) ? normalizeRepRange(c.reps, c.repsMin, stride) : null
   const epleyEligible = mode === 'reps' && !isBw({ ...c, id: ex.id }) && (active === 'linear' || climbsRange(active))
@@ -2456,7 +2475,7 @@ function ProgressionFields({ ex, mode, c, setC, routine, unit, perSide, bw, fall
     {/* Double progression on a weighted exercise fills this row with four steppers; `cfgrow-4`
         lets it wrap into two pairs on phones, where four abreast left the inputs a few px wide. */}
     {weightless && active !== 'off' && <div className="small dim" style={{ marginBottom: 12 }}>{t('Nothing to add in weight here: it goes up in reps, then sets.')}</div>}
-    {(active !== 'off' || backoff) && (!weightless || climbsRange(active) || active === 'triple') && <div className={'row cfgrow' + ((active === 'double' && epleyEligible) || active === 'triple' ? ' cfgrow-4' : '')} style={{ marginBottom: 18 }}>
+    {(active !== 'off' || backoff) && (!weightless || climbsRange(active) || active === 'triple') && <div className={'row cfgrow' + (((active === 'double' || active === 'rpt') && epleyEligible) || active === 'triple' ? ' cfgrow-4' : '')} style={{ marginBottom: 18 }}>
       {!weightless && <Stepper label={mode === 'time' ? t('Step (seconds)') : t('Step ({0})', unit)} value={inc}
         step={mode === 'time' ? 5 : 1.25} decimal={mode !== 'time'} invalid={invalid} className={invalid ? 'invalid' : ''}
         onStep={mode === 'time' ? undefined : (v, _s, dir) => nextStep(v, dir, unit)}
@@ -2478,6 +2497,36 @@ function ProgressionFields({ ex, mode, c, setC, routine, unit, perSide, bw, fall
       {active === 'density' && <Stepper label={t('Rest down to (s)')} value={c.restMin ?? DENSITY_FLOOR} step={15} min={15} max={600} decimal={false}
         onChange={v => setC(x => ({ ...x, restMin: v }))} />}
     </div>}
+    {active === 'rpt' && mode === 'reps' && !weightless && <>
+      <div className="sect-b" style={{ marginBottom: (effOff && rptMinRir > 0) || rptPreview ? 8 : 18 }}>
+        {!assisted && <SelectRow title={t('Back-off drop')} sheetTitle={t('Back-off drop')} value={String(rptPct)}
+          onChange={v => setC(x => ({ ...x, backoffPct: Number(v) }))}
+          options={[
+            { value: '5', label: '5%' },
+            { value: '10', label: '10%' },
+            { value: '15', label: '15%' },
+          ]} />}
+        {!assisted && <SelectRow title={t('Back-off sets')} sheetTitle={t('Back-off sets')} value={rptMode}
+          onChange={v => setC(x => ({ ...x, backoffMode: v }))}
+          options={[
+            { value: 'flat', label: t('Same weight after set 1'), subtitle: t('Set 2 drops by {0}%, and any sets after it stay there.', rptPct) },
+            { value: 'step', label: t('Step down each set'), subtitle: t('Each set after the first drops another {0}%.', rptPct) },
+          ]} />}
+        <SelectRow title={t('Effort gate')} sheetTitle={t('Effort gate')} value={String(rptMinRir)}
+          onChange={v => setC(x => ({ ...x, topMinRir: Number(v) }))}
+          options={[
+            { value: '0', label: t('Off'), subtitle: t('Add weight whenever set 1 hits the top of the rep range.') },
+            { value: '1', label: effScale === 'rpe' ? t('RPE 9 or easier') : t('1+ RIR in reserve'), subtitle: t('Hold the weight if set 1 was an all-out grind.') },
+            { value: '2', label: effScale === 'rpe' ? t('RPE 8 or easier') : t('2+ RIR in reserve'), subtitle: t('Leave at least two reps in the tank before adding weight.') },
+          ]} />
+      </div>
+      {effOff && rptMinRir > 0 && <div className="small dim" style={{ marginBottom: rptPreview ? 8 : 18 }}>
+        {t('Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.')}
+      </div>}
+      {rptPreview && <div className="small dim" style={{ marginBottom: 18 }}>
+        {t('Sets open at {0}. Set 1 drives progression; back-off sets follow it.', rptPreview)}
+      </div>}
+    </>}
     {/* What the three undulating days ask for, from the reps above. */}
     {active === 'undulating' && mode === 'reps' && <div className="small dim" style={{ marginTop: -8, marginBottom: 18 }}>
       {t('Medium {0} reps · heavy {1} · light {2}', dupReps({ ...c, id: ex.id }, 'medium'), dupReps({ ...c, id: ex.id }, 'heavy'), dupReps({ ...c, id: ex.id }, 'light'))}
@@ -2641,7 +2690,7 @@ function ExConfig({ ex, existing, onSave, onDelete, onReplace, close, routine, i
   // Freestyle follows no rule unless one is picked on the exercise mid-workout (ProgressionFields, #910).
   const ruleless = !routine && (freestyle === 'add' || (freestyle === 'edit' && !c.prog))
   const progressionPolicy = ruleless ? 'off' : policyFor({ ...c, id: ex.id }, routine, mode, profileRule(st))
-  const progressionStepInvalid = !progressionStepIsValid(progressionStepOf(c, mode, ex, st.unit), progressionPolicy, c.backoff === true && backoffOffered(c, mode, ex, bw), weightlessOf(c, mode, bw))
+  const progressionStepInvalid = !progressionStepIsValid(progressionStepOf(c, mode, ex, st.unit), progressionPolicy, c.backoff === true && backoffOffered(c, mode, ex, bw, progressionPolicy), weightlessOf(c, mode, bw))
   const activePolicy = progressionPolicy
   // Both climb a range: the flat Reps stepper gives way to "Reps from" / "Reps up to".
   const ranged = mode === 'reps' && climbsRange(activePolicy)
@@ -2678,6 +2727,15 @@ function ExConfig({ ex, existing, onSave, onDelete, onReplace, close, routine, i
     if (mode === 'reps' && activePolicy === 'density') {
       const restMin = Math.max(15, Math.min(600, Math.round(Number(c.restMin)) || DENSITY_FLOOR))
       if (restMin !== DENSITY_FLOOR) prog.restMin = restMin
+    }
+    // Top set & back-offs (`rpt`): drop %, back-off mode, and effort floor, omitted at defaults.
+    if (mode === 'reps' && activePolicy === 'rpt') {
+      const pct = rptBackoffPctOf(c)
+      if (pct !== RPT_DEFAULT_PCT) prog.backoffPct = pct
+      const bMode = rptBackoffModeOf(c)
+      if (bMode !== RPT_DEFAULT_MODE) prog.backoffMode = bMode
+      const minRir = rptTopMinRirOf(c)
+      if (minRir !== RPT_DEFAULT_MIN_RIR) prog.topMinRir = minRir
     }
     // Written only when it differs from what the dataset already says, so a barbell config
     // stays exactly the shape it was before these flags existed.
@@ -2769,7 +2827,7 @@ function ExConfig({ ex, existing, onSave, onDelete, onReplace, close, routine, i
       // decided here, in the plan, not re-decided live each time you train it.
       if (!list.length && c.intensifier && c.intensifier.type) out.intensifier = intensifierToSave(c.intensifier)
       // Back-off sets: written only when on, and only where the sheet offered them.
-      if (c.backoff === true && backoffOffered(out, 'reps', ex, bw) && isBackoff({ ...out, backoff: true })) out.backoff = true
+      if (c.backoff === true && backoffOffered(out, 'reps', ex, bw, activePolicy) && isBackoff({ ...out, backoff: true })) out.backoff = true
       // A pyramid has its own Max set for this, so the flag is not offered (or kept) there.
       if (!list.length) Object.assign(out, withFailure)
       saveAs(out)
@@ -3173,7 +3231,7 @@ function ExConfig({ ex, existing, onSave, onDelete, onReplace, close, routine, i
     </>}
     {pyramid
       ? <div className="small dim" style={{ marginBottom: 18 }}>{t('Weight is up to you: pyramid sets are not progressed automatically.')}</div>
-      : <ProgressionFields ex={ex} mode={mode} c={c} setC={setC} routine={routine} unit={st.unit} perSide={perSide} bw={bw} fallback={profileRule(st)} freestyle={routine ? false : freestyle} />}
+      : <ProgressionFields st={st} ex={ex} mode={mode} c={c} setC={setC} routine={routine} unit={st.unit} perSide={perSide} bw={bw} fallback={profileRule(st)} freestyle={routine ? false : freestyle} />}
     <textarea className="input" rows={3} maxLength={500} style={{ marginBottom: 18 }}
       placeholder={t('Note (optional): loading cues, "bar only, then +1 plate/side each set", anything worth remembering')}
       value={c.note || ''} onChange={e => setC(x => ({ ...x, note: e.target.value }))} />

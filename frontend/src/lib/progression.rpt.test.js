@@ -14,7 +14,8 @@ import { buildPlanBundle, parsePlan, mergePlan } from './plan-share.js'
 import { convertStateUnit } from './units.js'
 import { withExUnit } from './ex-unit.js'
 import { routineFromSession } from './session-routines.js'
-import { isWarmupRow, isSideSet, setSideField, toggleSide } from './workout-model.js'
+import { cascadeWeight } from './history.js'
+import { isWarmupRow, isSideSet, makeSideSet, setSideField, toggleSide, WEIGHT_ORIGIN_MANUAL } from './workout-model.js'
 import { EXDB, isAssisted } from './exercises.js'
 
 const BENCH = '0025' // barbell bench press — 20 kg bar, 2.5 kg step
@@ -433,5 +434,99 @@ describe('Downstream ecosystem contracts (finishCompare, plan-share, units, sess
     expect(copied.ex[0].weight).toBe(80)
     expect(copied.ex[0].reps).toBe(10)
     expect(copied.ex[0].repsMin).toBe(7)
+  })
+})
+
+describe('Live workout cascadeWeight for RPT', () => {
+  const flatSpec = { pct: 10, mode: 'flat', grid: 2.5, floor: 20 }
+  const stepSpec = { pct: 10, mode: 'step', grid: 2.5, floor: 20 }
+
+  it('recalculates open back-off sets onto nearest grid when Set 1 is edited live (flat & step)', () => {
+    const rows = [
+      { w: 40, r: 8, phase: 'warmup', done: true },
+      { w: 60, r: 5, warmup: true, done: false },
+      { w: 85, r: 7, done: false },
+      { w: 72.5, r: 7, done: false },
+      { w: 72.5, r: 7, done: false },
+    ]
+    // 85 * 0.9 = 76.5 -> nearest 2.5 step is 77.5; 85 * 0.8 = 68 -> nearest 2.5 step is 67.5
+    const flatOut = cascadeWeight(rows, 2, 85, undefined, flatSpec)
+    expect(flatOut.map(r => r.w)).toEqual([40, 60, 85, 77.5, 77.5])
+
+    const stepOut = cascadeWeight(rows, 2, 85, undefined, stepSpec)
+    expect(stepOut.map(r => r.w)).toEqual([40, 60, 85, 77.5, 67.5])
+  })
+
+  it('populates real back-off loads on Day 1 when Set 1 is edited from 0 -> 80 kg', () => {
+    const rows = [
+      { w: 80, r: 7, done: false },
+      { w: 0, r: 7, done: false },
+      { w: 0, r: 7, done: false },
+    ]
+    const out = cascadeWeight(rows, 0, 80, undefined, flatSpec)
+    expect(out.map(r => r.w)).toEqual([80, 72.5, 72.5])
+  })
+
+  it('cascades flat when Set 2 is manually overridden in flat mode, and uses relative step offset in step mode', () => {
+    const baseRows = [
+      { w: 40, r: 8, phase: 'warmup', done: true },
+      { w: 80, r: 8, done: true },
+      { w: 70, r: 7, done: false, weightOrigin: WEIGHT_ORIGIN_MANUAL },
+      { w: 72.5, r: 7, done: false },
+      { w: 72.5, r: 7, done: false },
+    ]
+    // Flat mode: editing Set 2 (index 2, fromWorkIdx = 1) to 70 cascades 70 across Sets 3 & 4
+    const flatOut = cascadeWeight(baseRows, 2, 70, undefined, flatSpec)
+    expect(flatOut.map(r => r.w)).toEqual([40, 80, 70, 70, 70])
+
+    // Step mode: relative offset (workIdx - fromWorkIdx) * pct from 70 kg:
+    // Set 3 (offset 1): 70 * 0.9 = 63 -> 62.5 kg (NOT 70 * 0.8 = 56!)
+    // Set 4 (offset 2): 70 * 0.8 = 56 -> 55 kg (NOT 70 * 0.7 = 49!)
+    const stepOut = cascadeWeight(baseRows, 2, 70, undefined, stepSpec)
+    expect(stepOut.map(r => r.w)).toEqual([40, 80, 70, 62.5, 55])
+  })
+
+  it('preserves completed rows and manual weight overrides while holding sequence positions', () => {
+    const rows = [
+      { w: 90, r: 7, done: false },
+      { w: 72.5, r: 8, done: true },
+      { w: 75, r: 7, done: false, weightOrigin: WEIGHT_ORIGIN_MANUAL },
+      { w: 65, r: 7, done: false },
+    ]
+    // Step mode from 90: seq = [90, 80, 72.5, 62.5]; Set 2 (done) stays 72.5, Set 3 (manual) stays 75, Set 4 gets 62.5
+    const out = cascadeWeight(rows, 0, 90, undefined, stepSpec)
+    expect(out.map(r => r.w)).toEqual([90, 72.5, 75, 62.5])
+  })
+
+  it('cascades unilateral side sets per limb or both limbs while preserving done/manual limbs', () => {
+    const dbSpec = { pct: 10, mode: 'step', grid: [16, 18, 20, 22, 24, 26, 28, 30], floor: 0 }
+    const s1 = setSideField(makeSideSet({ w: 30, r: 8 }), 'L', 'w', 30)
+    const s2DoneR = toggleSide(makeSideSet({ w: 26, r: 8 }), 'R')
+    const s3 = makeSideSet({ w: 24, r: 8 })
+
+    // Edit only Left side of Set 1 to 28 -> Left cascades [28, 26, 22], Right on s2 (done) stays 26 and s3 Right stays 24
+    const leftOnly = cascadeWeight([setSideField(s1, 'L', 'w', 28), s2DoneR, s3], 0, 28, 'L', dbSpec)
+    expect(leftOnly[1].sides.L.w).toBe(26)
+    expect(leftOnly[1].sides.R.w).toBe(26)
+    expect(leftOnly[2].sides.L.w).toBe(22)
+    expect(leftOnly[2].sides.R.w).toBe(24)
+
+    // Edit both sides (side = undefined) from Set 1 = 30 -> [30, 28, 24] on open limbs
+    const both = cascadeWeight([s1, makeSideSet({ w: 20, r: 8 }), makeSideSet({ w: 20, r: 8 })], 0, 30, undefined, dbSpec)
+    expect(both.map(r => [r.sides.L.w, r.sides.R.w])).toEqual([[30, 30], [28, 28], [24, 24]])
+  })
+
+  it('clamps cascaded weights at barFloor and deletes weight cleanly when cleared (value = null)', () => {
+    const rows = [
+      { w: 22.5, r: 7, done: false },
+      { w: 20, r: 7, done: false },
+      { w: 20, r: 7, done: false },
+    ]
+    const clamped = cascadeWeight(rows, 0, 22.5, undefined, stepSpec)
+    expect(clamped.map(r => r.w)).toEqual([22.5, 20, 20])
+
+    const cleared = cascadeWeight(clamped, 0, null, undefined, stepSpec)
+    expect(cleared[1].w).toBeUndefined()
+    expect(cleared[2].w).toBeUndefined()
   })
 })

@@ -9,7 +9,7 @@ import { autoHoldsFor, forecastHolds, nextAutoHold } from '../lib/auto-holds.js'
 import { EXIDX, exOr, betterWeight, isAssisted } from '../lib/exercises.js'
 import { bestsFor, lastRowFor, oddValues } from '../lib/typo-check.js'
 import { usesBar } from '../lib/bar.js'
-import { loadKindFor, baseWeightFor, inventoryFor, rowLoad, sameLoad, plateDelta, dropGrid } from '../lib/plates.js'
+import { loadKindFor, baseWeightFor, inventoryFor, rowLoad, sameLoad, plateDelta, dropGrid, backoffGrid } from '../lib/plates.js'
 import { plateText } from '../lib/plate-text.js'
 import { effectiveRoutines, effectiveRoutineIds, lastEntryFor, bestWeightFor, bestWeightForEntry, freestyleConfig, pickedExerciseConfig, setsDoneActive, setUnitsTotal, supersetUnits, unitOf, setLabel, modeOf, isBw, isPerSide, repStep, EFFORT, effortOf, stepEffort, capEffort, cascadeWeight, liveReramp, insertWarmupRow, barFloor, makeWarmupAt, canBeWarmup, makeWorkAt, removeRowAt, removeLastSet, setSpanAt, copyRowAt, copySpanAt, insertRowAt, pairAdjacent, unpairSuperset, cleanupSg, applyIntensifierPlan, pinnedNoteFor, exNoteFor, setsRepsOf, sessionVolume } from '../lib/history.js'
 import { cleanNum, fmtNum, fmtPlate, fmtVol, fmtWeight, exerciseNameText, fmtDate, fmtDaysAgo, todayISO, exCount, DAYN } from '../lib/format.js'
@@ -135,12 +135,32 @@ function StartChooser() {
 // The open warm-ups follow the first work set when its weight changes mid-workout (#156,
 // lib/history.js liveReramp): 100 → 110 and the rungs not done yet move with it, on this gym's
 // plates. A rung you typed yourself or already did stays. `e` is the entry in its own unit.
+function gymStateFor(s, exId) {
+  const g = sessionGymView(s)
+  return exView({ ...g, active: undefined }, exId)
+}
+
 function rerampOpen(s, e, i) {
   if (!e?.sets || isWarmupRow(e.sets[i]) || e.sets.findIndex(x => !isWarmupRow(x)) !== i) return
   const cfg = { ...(e.target || {}), id: e.id }
   if (modeOf(cfg) !== 'reps') return
-  const V = exView(s, e.id)
+  const V = gymStateFor(s, e.id)
   e.sets = liveReramp(e.sets, dropGrid(V, cfg), barFloor(V, e.id), isAssisted(cfg))
+}
+
+function cascadeSpecFor(s, e) {
+  const cfg = { ...(e?.target || {}), id: e?.id }
+  if (modeOf(cfg) !== 'reps') return 0
+  if (e?.target?.rpt && !isAssisted(cfg)) {
+    const V = gymStateFor(s, e.id)
+    return {
+      pct: e.target.rpt.pct,
+      mode: e.target.rpt.mode,
+      grid: backoffGrid(V, cfg),
+      floor: barFloor(V, e.id),
+    }
+  }
+  return e?.target?.backoffStep || 0
 }
 
 // A set-row column's number as it is shown. Most columns show what is stored; one with a `view`
@@ -289,7 +309,7 @@ function ExerciseBlock({ entryIdx, compact, listed, dense, editing, onToggle, on
       const row = setSideField(e.sets[i], side, field, v)
       row.sides[side].weightOrigin = WEIGHT_ORIGIN_MANUAL
       e.sets[i] = markWarmupEdited(row, field)
-      e.sets = cascadeWeight(e.sets, i, v, side, e.target?.backoffStep)
+      e.sets = cascadeWeight(e.sets, i, v, side, cascadeSpecFor(s, e))
       rerampOpen(s, e, i)
     }), true)
   }
@@ -1598,9 +1618,10 @@ function ActiveWorkout() {
     // carries through without retyping every row while explicit manual exceptions stay put. A
     // warm-up edit stays on its own row, and the later rungs keep their ramp loads.
     if (field === 'w') {
+      const curS = useStore.getState().S
       e.sets[i].weightOrigin = WEIGHT_ORIGIN_MANUAL
-      e.sets = cascadeWeight(e.sets, i, v, undefined, e.target?.backoffStep)
-      rerampOpen(useStore.getState().S, e, i)
+      e.sets = cascadeWeight(e.sets, i, v, undefined, cascadeSpecFor(curS, e))
+      rerampOpen(curS, e, i)
     }
     // A warm-up you changed is yours from now on ("Your last session" carries it, #525).
     e.sets[i] = markWarmupEdited(e.sets[i], field)
