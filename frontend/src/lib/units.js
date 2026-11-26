@@ -84,6 +84,8 @@ export const mapTargetWeights = (cfg, c, prev, cInc = c) => {
   if (Array.isArray(out.warmup)) out.warmup = out.warmup.map((w, i) => (w && w.weight != null ? { ...w, weight: c(w.weight, p.warmup?.[i]?.weight) } : w))
   // A pyramid's own weight per set; 0 ("no plan for this set") stays 0.
   if (Array.isArray(out.pyramidWeight)) out.pyramidWeight = out.pyramidWeight.map((w, i) => (w > 0 ? c(w, p.pyramidWeight?.[i]) : w))
+  // Derived per-set weights stamped on a "Top set & back-offs" (`rpt`) session target.
+  if (Array.isArray(out.rowWeights)) out.rowWeights = out.rowWeights.map((w, i) => (w > 0 ? c(w, p.rowWeights?.[i]) : w))
   return out
 }
 export const mapEntryWeights = (e, c, prev, cInc = c) => {

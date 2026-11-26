@@ -5,8 +5,8 @@
 // either imports this file, so there is no cycle.
 import { buildSets, applyIntensifierPlan, modeOf, barFloor, isBw, isPerSide, lastEntryFor, insertWarmupRow, bandClimbReps } from './history.js'
 import { isWarmupRow, isSideSet, syncSideAggregate } from './workout-model.js'
-import { nextPrescription, applyPrescription, defaultIncrement, weightIncrement, plannedOf, deloadTo, DELOAD_FACTOR, sessionsFor } from './progression.js'
-import { dropGrid } from './plates.js'
+import { nextPrescription, applyPrescription, defaultIncrement, weightIncrement, plannedOf, deloadTo, DELOAD_FACTOR, sessionsFor, rptBackoffPctOf, rptBackoffModeOf } from './progression.js'
+import { dropGrid, backoffGrid } from './plates.js'
 import { backoffStepOf, applyBackoff } from './backoff.js'
 import { dbLoadFor, historyAs, ownedWeightsFor, withMeaning } from './dumbbells.js'
 import { isAssisted } from './exercises.js'
@@ -106,7 +106,8 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
   const meaning = dbLoadFor(stored, cfg)
   const st = historyAs(stored, cfg.id, meaning)
   // `plan` is kept on the entry purely so the workout can explain the number it chose.
-  let plan = noProg ? { policy: 'off', kind: 'off' } : nextPrescription(st, cfg, routine)
+  const rptOpts = modeOf(cfg) === 'reps' ? { grid: backoffGrid(st, cfg), floor: barFloor(st, cfg.id) } : undefined
+  let plan = noProg ? { policy: 'off', kind: 'off' } : nextPrescription(st, cfg, routine, rptOpts)
   // The warm-up ramp and the prescription snap to the exercise's own increment (1.25 kg
   // plates exist), not the unit default; a timed exercise's `inc` is seconds, so it keeps the
   // default for its optional load.
@@ -141,8 +142,8 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
   // Warm-ups ramp over the dumbbells you own when the profile lists them (issue #376): a rung
   // lands on the heaviest bell under it, never on a weight in between that no rack holds.
   const ramp = (modeOf(cfg) === 'reps' && ownedWeightsFor(st, cfg)) || step
-  // Back-off sets step down from the top set by the exercise's own step (lib/backoff.js).
-  const backoffStep = modeOf(cfg) === 'reps' && backoffStepOf(cfg, st.unit) ? step : 0
+  // Back-off sets step down from the top set by the exercise's own step (lib/backoff.js); never under `rpt`.
+  const backoffStep = modeOf(cfg) === 'reps' && plan.policy !== 'rpt' && backoffStepOf(cfg, st.unit) ? step : 0
   // Warm-ups carried from the last session ("Your last session") are final: they go in front
   // AFTER the prescription, back-off and intensifier steps, none of which may rewrite them.
   const warmCarry = carriedWarmups(st, cfg, routine, noProg)
@@ -153,7 +154,7 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
   // Bands that go up start the reps again from the bottom (history.js seedBands): the heavier band
   // is this session's progress, not one rep more on top of it.
   const climbReps = plan.reps != null ? bandClimbReps(st, rowCfg, buildOpts) : 0
-  if (climbReps) plan = { ...plan, reps: climbReps, rowReps: undefined, why: undefined }
+  if (climbReps) plan = { ...plan, reps: climbReps, rowReps: undefined, rowWeights: undefined, why: undefined }
   const built = applyPrescription(buildSets(st, warmCarry || block ? { ...rowCfg, warmupSets: 0 } : rowCfg, buildOpts), plan, ramp, barFloor(st, cfg.id), isAssisted(cfg))
   const rows = backoffStep ? applyBackoff(built, backoffStep) : built
   const shaped = applyIntensifierPlan(rows, cfg, dropGrid(st, cfg))
@@ -173,6 +174,13 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
   // must not have a later session graded against an old day's aims.
   if (Array.isArray(plan.rowReps)) target.rowReps = plan.rowReps
   else delete target.rowReps
+  // "Top set & back-offs" (`rpt`): `target.weight` and `target.reps` stay the top set's so finish
+  // summaries and Last/Next sheets keep reading Set 1; `rowWeights` carries the derived per-set loads.
+  if (Array.isArray(plan.rowWeights)) target.rowWeights = plan.rowWeights
+  else delete target.rowWeights
+  if (plan.policy === 'rpt' && plan.kind !== 'programme' && !(isBw(cfg) && !(cfg.weight > 0) && !(plan.weight > 0))) {
+    target.rpt = { pct: rptBackoffPctOf(cfg), mode: rptBackoffModeOf(cfg) }
+  } else delete target.rpt
   // The step the back-off sets were built with, kept on the session so reading it back
   // (progression.js readSession) holds each set to its own weight even after the plan changes.
   if (backoffStep) target.backoffStep = backoffStep
@@ -247,6 +255,8 @@ export function programmePlan(st, cfg, plan, slot, step) {
  */
 export function plannedConfigOf(entry) {
   const out = { ...(entry?.target || {}) }
+  delete out.rowWeights
+  delete out.rpt
   const planned = entry?.planned
   if (!planned) return out
   for (const key of ['sets', 'reps', 'repsMin', 'sec']) {

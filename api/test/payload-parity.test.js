@@ -118,3 +118,66 @@ test('readSession agrees with the frontend on per-set aims under triple progress
   assert.equal(frontendReadSession(miss, PLAN).ok, false);
   assert.equal(exOf(reviewFor([passing, passing, miss])).lastOk, false);
 });
+
+test('readSession and cleanPlan agree with the frontend on Top set & back-offs (`rpt`)', () => {
+  const BENCH_ID = '0025';
+  const rptPlan = { id: BENCH_ID, sets: 3, reps: 10, repsMin: 7, mode: 'reps', weight: 80, prog: 'rpt', backoffPct: 15, backoffMode: 'step', topMinRir: 0 };
+  const rptTarget = { sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt', rpt: { pct: 15, mode: 'step' }, rowWeights: [80, 67.5, 55] };
+  const rptEntry = sets => ({ id: BENCH_ID, target: rptTarget, sets });
+  const buildRpt = entries => payload.build(sampleState({
+    routines: [{ id: 'r-rpt', name: 'Push', ex: [rptPlan] }],
+    workouts: entries.map((en, i) => ({
+      id: 'wr' + i, d: `2026-08-${String(i + 1).padStart(2, '0')}`, name: 'Push',
+      start: 1000, end: 2000, entries: [en],
+    })),
+  }), { handle: handleFor('u_parity'), kind: 'review' });
+  const benchAgg = p => p.aggregates.exercises.find(e => e.id === BENCH_ID);
+
+  // Set 1 hits range (8 in 7..10) while back-offs miss or stay unchecked -> ok on both sides, 0 stalls.
+  const hitWithBackoffMiss = rptEntry([
+    { w: 80, r: 8, rpe: 9.5, done: true },
+    { w: 67.5, r: 4, done: true },
+    { w: 55, r: 0, done: false },
+  ]);
+  const pHit = buildRpt([hitWithBackoffMiss, hitWithBackoffMiss, hitWithBackoffMiss]);
+  assert.equal(frontendReadSession(hitWithBackoffMiss, rptPlan).ok, true);
+  assert.equal(benchAgg(pHit).lastOk, true);
+  assert.equal(benchAgg(pHit).stalls, 0);
+  assert.deepEqual(
+    [pHit.plan.routines[0].ex[0].prog, pHit.plan.routines[0].ex[0].backoffPct, pHit.plan.routines[0].ex[0].backoffMode, pHit.plan.routines[0].ex[0].topMinRir],
+    ['rpt', 15, 'step', 0]
+  );
+
+  // Set 1 misses repsMin (6 < 7) even if back-offs get 12 -> miss on both sides, 1 stall.
+  const set1Miss = rptEntry([
+    { w: 80, r: 6, done: true },
+    { w: 67.5, r: 12, done: true },
+    { w: 55, r: 12, done: true },
+  ]);
+  assert.equal(frontendReadSession(set1Miss, rptPlan).ok, false);
+  assert.equal(benchAgg(buildRpt([hitWithBackoffMiss, hitWithBackoffMiss, set1Miss])).lastOk, false);
+  assert.equal(benchAgg(buildRpt([hitWithBackoffMiss, hitWithBackoffMiss, set1Miss])).stalls, 1);
+
+  // Set 1 left unchecked while lighter Set 2 was ticked -> miss on both sides.
+  const skippedTop = rptEntry([
+    { w: 80, r: 10, done: false },
+    { w: 67.5, r: 10, done: true },
+    { w: 55, r: 10, done: true },
+  ]);
+  assert.equal(frontendReadSession(skippedTop, rptPlan).ok, false);
+  assert.equal(benchAgg(buildRpt([hitWithBackoffMiss, hitWithBackoffMiss, skippedTop])).lastOk, false);
+
+  // Adjustment #4: inherited routine-level `rpt` on a 0 kg bodyweight exercise grades all sets like ordinary bodyweight.
+  const bwPlan = { id: EX_ID, sets: 3, reps: 10, mode: 'reps', weight: 0, bodyweight: true };
+  const bwShortBackoff = { id: EX_ID, target: { sets: 3, reps: 10, weight: 0, bodyweight: true }, sets: [set(10), set(10), set(6)] };
+  const pBw = payload.build(sampleState({
+    routines: [{ id: 'r-bw', name: 'BW', prog: 'rpt', ex: [bwPlan] }],
+    workouts: [passing_bw(), passing_bw(), bwShortBackoff].map((en, i) => ({
+      id: 'wb' + i, d: `2026-08-${String(i + 1).padStart(2, '0')}`, name: 'BW',
+      start: 1000, end: 2000, entries: [en],
+    })),
+  }), { handle: handleFor('u_parity'), kind: 'review' });
+  assert.equal(frontendReadSession(bwShortBackoff, { ...bwPlan, prog: 'rpt' }).ok, false);
+  assert.equal(exOf(pBw).lastOk, false);
+  function passing_bw() { return { id: EX_ID, target: { sets: 3, reps: 10, weight: 0, bodyweight: true }, sets: [set(10), set(10), set(10)] }; }
+});

@@ -301,3 +301,57 @@ export function dropGrid(S, cfg) {
   }
   return weightIncrement(cfg, S?.unit === 'lb' ? 'lb' : 'kg')
 }
+
+/**
+ * Where a percentage back-off set (`rpt`) may land (lib/backoff.js snapBackoff): on the profile's
+ * owned dumbbells or machine stack when listed, else on the nearest loadable plate combination at
+ * or under `prev` when custom plates are counted (stepping down one plate jump only if nearest
+ * rounding equals `prev`), else on the exercise's weight step.
+ */
+export function backoffGrid(S, cfg) {
+  const owned = ownedWeightsFor(S, cfg)
+  if (owned) return owned
+  const kind = loadKindFor(S, cfg)
+  if (ownsPlates(S) && (kind === 'pairs' || kind === 'single')) {
+    const base = baseWeightFor(S, cfg?.id)
+    const inv = inventoryFor(S)
+    if (inv.length || base > 0) {
+      const per = kind === 'pairs' ? 2 : 1
+      const stepQ = per / Q
+      const smallestPlate = inv.length ? inv[inv.length - 1].w : 0
+      const minLoad = base > 0 ? base : (smallestPlate > 0 ? per * smallestPlate : 0)
+      const atOrUnder = w => {
+        if (w <= base) return base > 0 ? base : 0
+        const { perSide, missing } = rowLoad(kind, w, base, inv)
+        return Math.round((base + per * Math.max(0, perSide - missing)) * 1000) / 1000
+      }
+      return (raw, prev) => {
+        const p = num(prev)
+        if (!(p > 0)) return 0
+        const minW = Math.min(p, minLoad)
+        if (p <= minW + 1e-6) return p
+        const r = Math.min(p, Math.max(minW, num(raw)))
+        const low = Math.max(minW, atOrUnder(r))
+        const topLoad = Math.max(minW, atOrUnder(p))
+        let high = low
+        if (low < r - 1e-6 && topLoad > low + 1e-6) {
+          let lo = Math.round((low - base) / stepQ) + 1
+          let hi = Math.round((topLoad - base) / stepQ)
+          while (lo < hi) {
+            const mid = Math.floor((lo + hi) / 2)
+            if (atOrUnder(base + mid * stepQ) > low + 1e-6) hi = mid
+            else lo = mid + 1
+          }
+          high = Math.round((base + lo * stepQ) * 1000) / 1000
+        }
+        let best = Math.abs(high - r) <= Math.abs(low - r) + 1e-6 ? high : low
+        if (best >= p - 1e-6) {
+          const down = atOrUnder(p - stepQ)
+          if (down >= minW - 1e-6 && down < p - 1e-6) best = down
+        }
+        return Math.max(minW, Math.min(p, best))
+      }
+    }
+  }
+  return weightIncrement(cfg, S?.unit === 'lb' ? 'lb' : 'kg')
+}

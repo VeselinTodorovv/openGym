@@ -16,21 +16,22 @@
 //   · fewer sets than prescribed                       → miss
 // So a session that fell apart can never advance the load as though it had succeeded.
 
-import { modeOf, repStep, rerampWarmups, isBw, isPerSide, entryExcluded, entryRoutineId, lastAcrossRoutines } from './history.js'
+import { modeOf, repStep, rerampWarmups, isBw, isPerSide, entryExcluded, entryRoutineId, lastAcrossRoutines, effortOf, barFloor } from './history.js'
 import { EXIDX, isAssisted, isLoadedEq, defaultIncrement } from './exercises.js'
 import { isWarmupRow, isSideSet, syncSideAggregate, makeSideSet } from './workout-model.js'
 import { normalizeRepRange } from './rep-range.js'
 import { nextRung } from './ladders.js'
 import { gymSplitView } from './gym-split.js'
 import { isPyramid } from './pyramid.js'
-import { backoffAt } from './backoff.js'
+import { backoffAt, rptWeightsFrom } from './backoff.js'
 import { ownedWeightsFor, ownedKindFor, ownedUp, ownedDeload, ownedAround } from './dumbbells.js'
+import { rirOf } from './effort.js'
 
-export const POLICIES = ['off', 'linear', 'greyskull', 'double', 'steady', 'triple', 'undulating', 'density', 'ladder', 'time']
+export const POLICIES = ['off', 'linear', 'greyskull', 'double', 'steady', 'triple', 'rpt', 'undulating', 'density', 'ladder', 'time']
 
 // Which policies can sensibly drive which logging mode.
 export const POLICIES_FOR = {
-  reps: ['off', 'linear', 'greyskull', 'double', 'steady', 'triple', 'undulating', 'density', 'ladder'],
+  reps: ['off', 'linear', 'greyskull', 'double', 'steady', 'triple', 'rpt', 'undulating', 'density', 'ladder'],
   time: ['off', 'time'],
   cardio: ['off']
 }
@@ -42,6 +43,7 @@ export const POLICY_NAME = {
   double: 'Double progression',
   triple: 'Triple progression',
   steady: 'Steady double progression',
+  rpt: 'Top set & back-offs',
   undulating: 'Undulating days',
   density: 'Shorter rests',
   ladder: 'Skill ladder',
@@ -54,6 +56,7 @@ export const POLICY_DESC = {
   double: 'Work up through a rep range at the same weight. Reach the top of the range in every set and the weight goes up, reps back to the bottom.',
   triple: 'Reps climb to the top of the range, then a set is added, up to your most sets. All of them at the top and the weight goes up, back to your first sets and reps.',
   steady: 'Work up a rep range one rep at a time. Every set has to hit the target before it moves, and at the top of the range the weight goes up.',
+  rpt: 'Push the first set through a rep range, with lighter back-off sets after it. Hit the top of the range with enough in reserve and the weight goes up.',
   undulating: 'Each session rotates: a medium day at your reps, a heavy day with fewer, a light day with more. The weights come from your estimated max, so they climb as you get stronger.',
   density: 'Same weight, a bit less rest each time every set is clean. At your shortest rest the weight goes up and the rest starts over.',
   ladder: 'For bodyweight skills. One more rep each clean session up to the top of the range, then the next, harder variation of the ladder, back at the bottom.',
@@ -63,7 +66,38 @@ export const POLICY_DESC = {
 // The Epley target is a soft objective mapped onto the exercise's real load grid. Keep the
 // default out of saved configs so plans written before this policy stays byte-for-byte compatible.
 export const DELOAD_FACTOR = 0.9
-export const DELOAD_AFTER = { linear: 3, greyskull: 1, double: 3, steady: 3, triple: 3, density: 3, time: 3 }
+export const DELOAD_AFTER = { linear: 3, greyskull: 1, double: 3, steady: 3, triple: 3, rpt: 3, density: 3, time: 3 }
+export const RPT_PCTS = [5, 10, 15]
+export const RPT_DEFAULT_PCT = 10
+export const RPT_MODES = ['flat', 'step']
+export const RPT_DEFAULT_MODE = 'flat'
+export const RPT_MIN_RIRS = [0, 1, 2]
+export const RPT_DEFAULT_MIN_RIR = 1
+
+export function rptBackoffPctOf(cfg) {
+  const n = Number(cfg?.backoffPct)
+  return RPT_PCTS.includes(n) ? n : RPT_DEFAULT_PCT
+}
+export function rptBackoffModeOf(cfg) {
+  return cfg?.backoffMode === 'step' ? 'step' : RPT_DEFAULT_MODE
+}
+export function rptTopMinRirOf(cfg) {
+  const raw = cfg?.topMinRir
+  if (raw === 0 || raw === '0' || raw === 'off' || raw === false) return 0
+  const n = Number(raw)
+  return RPT_MIN_RIRS.includes(n) ? n : RPT_DEFAULT_MIN_RIR
+}
+export function rptRowWeights(topWeight, setsCount, cfg, { grid = 2.5, floor = 0, assisted = false } = {}) {
+  const n = Math.max(1, Math.round(Number(setsCount)) || 1)
+  const top = Number(topWeight) || 0
+  if (!(top > 0) || assisted) return null
+  return rptWeightsFrom(top, n, {
+    pct: rptBackoffPctOf(cfg),
+    mode: rptBackoffModeOf(cfg),
+    grid,
+    floor,
+  })
+}
 export const DELOAD_FACTOR_MIN = 0.5
 export const DELOAD_FACTOR_MAX = 0.95
 
@@ -332,6 +366,45 @@ export function readSession(entry, fallback) {
     }
   }
   const goal = rowGoals ? Math.max(...rowGoals) : (target.reps || 0)
+  const mergedCfg = { ...(fallback || {}), ...target, id: entry?.id || target.id || fallback?.id }
+  const assistedEntry = isAssisted(mergedCfg)
+  const firstDone = logged.find(s => s && s.done) || null
+  const setLoad = s => {
+    if (!s) return 0
+    if (isSideSet(s)) {
+      const lw = Number(s.sides.L?.w) || 0, rw = Number(s.sides.R?.w) || 0
+      return assistedEntry ? Math.max(lw, rw) : Math.min(lw, rw)
+    }
+    return Number(s.w) || 0
+  }
+  const topSet = firstDone ? {
+    w: setLoad(firstDone),
+    r: Number(firstDone.r) || 0,
+    rir: rirOf(firstDone),
+    firstRow: firstDone === logged[0],
+  } : null
+  const baseWeight = loadOf(entry, sets)
+  const isRpt = mode === 'reps'
+    && !!(entry?.target?.rpt || Array.isArray(entry?.target?.rowWeights) || (target.prog || fallback?.prog) === 'rpt')
+    && !(isBw(mergedCfg) && baseWeight <= 0 && !(Number(target.weight) > 0))
+  if (isRpt) {
+    const range = normalizeRepRange(target.reps || fallback?.reps || 10, target.repsMin ?? fallback?.repsMin, repStep(mergedCfg))
+    const prescribedTop = Number(entry?.target?.weight) || 0
+    const atTopLoad = !(prescribedTop > 0) || (topSet && (assistedEntry ? topSet.w <= prescribedTop + 0.05 : topSet.w >= prescribedTop - 0.05))
+    const weight = topSet
+      ? (!topSet.firstRow && !atTopLoad ? prescribedTop : topSet.w)
+      : (prescribedTop > 0 ? prescribedTop : baseWeight)
+    const reps = sets.map(s => (s.done ? (s.r || 0) : 0))
+    return {
+      mode, target, goal: range.reps, reps,
+      weight,
+      count: reps.length,
+      low: reps.length ? Math.min(...reps) : 0,
+      amrap: reps.length ? reps[reps.length - 1] : 0,
+      ...(topSet ? { topSet } : {}),
+      ok: !!(topSet && topSet.r >= range.repsMin && (atTopLoad || topSet.firstRow)),
+    }
+  }
   // Back-off sets (lib/backoff.js): each planned set after the first is held to its own weight,
   // stepped down from the top set as logged. Taking a back-off set lighter to get its reps is
   // not the sequence done, so it reads like a set short of its reps. Only a session that was
@@ -342,10 +415,11 @@ export function readSession(entry, fallback) {
   const reps = sets.map((s, k) => (s.done && heavyEnough(s, k) ? (s.r || 0) : 0))
   return {
     mode, target, goal, reps,
-    weight: loadOf(entry, sets),
+    weight: baseWeight,
     count: reps.length,                                   // the dimension bodyweight work grows (#33)
     low: reps.length ? Math.min(...reps) : 0,
     amrap: reps.length ? reps[reps.length - 1] : 0,       // Greyskull's final set
+    ...(topSet ? { topSet } : {}),
     ok: goal > 0 && enough && reps.length > 0 && reps.every((r, k) => r >= (rowGoals ? rowGoals[k] ?? goal : goal))
   }
 }
@@ -430,10 +504,14 @@ const sameRows = (a, b) => JSON.stringify(a?.target?.rowReps || null) === JSON.s
 //   - A change of weight ends the streak (per pr !93). 
 //     Rationale: deload should reflect the failures in sessions with weight that earned it. Not the lighter weight that follows;
 //   - Under double progression, a session that beat its best at the current weight.
-export function stallCount(sessions, policy) {
+export function stallCount(sessions, policy, cfg) {
   let n = 0
   for (let i = sessions.length - 1; i >= 0; i--) {
     if (sessions[i].ok) break
+    if (policy === 'rpt' && cfg) {
+      const range = normalizeRepRange(cfg.reps || sessions[i].goal || 10, cfg.repsMin, repStep(cfg))
+      if (sessions[i].topSet && sessions[i].topSet.firstRow && sessions[i].topSet.r >= range.repsMin) break
+    }
       if (i < sessions.length -1 && sessions[i].weight !== sessions[i+1].weight) break
     // So does an edit of the plan (issue #275): misses against the old sets × reps say nothing
     // about the new ones. Only sessions that both carry their plan can show one.
@@ -524,7 +602,7 @@ export function densityRestOf(S, cfg) {
  * planned sessions from the last session, in which case the rows keep last time's (see
  * startsFromLast in session-start.js).
  */
-export function nextPrescription(S, cfg, routine) {
+export function nextPrescription(S, cfg, routine, opts = {}) {
   // An exercise kept per gym (#988, lib/gym-split.js) progresses from this gym's (or brand's)
   // sessions only: 15 kg on one cable stack says nothing about the next weight on another.
   S = gymSplitView(S, cfg?.id)
@@ -571,12 +649,31 @@ export function nextPrescription(S, cfg, routine) {
   // Steady double progression starts a range at its bottom, every set together.
   const steady = policy === 'steady' && mode === 'reps'
   const rangeS = steady ? normalizeRepRange(cfg.reps || last?.goal || 10, cfg.repsMin, repStep(cfg)) : null
+  // "Top set & back-offs" (`rpt`): Set 1 climbs the range, trailing sets drop by percentage on the gym's grid.
+  const rpt = policy === 'rpt' && mode === 'reps'
+  const rangeR = rpt ? normalizeRepRange(cfg.reps || last?.goal || 10, cfg.repsMin, repStep(cfg)) : null
+  const rptGrid = opts?.grid || owned || inc
+  const rptFloor = opts?.floor ?? barFloor(S, cfg.id)
+  const rowsFor = w => rptRowWeights(w, cfg.sets, cfg, { grid: rptGrid, floor: rptFloor, assisted })
   if (policy === 'ladder' && mode === 'reps') return ladderPrescription(S, cfg, last, policy)
   if (policy === 'undulating' && mode === 'reps') {
     const out = undulatingPrescription(S, cfg, { policy, inc, unit, owned, assisted })
     if (out) return out
   }
   if (!last) {
+    if (rpt) {
+      const conf = (S.exWeights || {})[cfg.id]
+      const startW = conf && conf.w > 0 ? conf.w : (cfg.weight > 0 ? cfg.weight : 0)
+      if (isBw(cfg) && !(startW > 0)) return { policy, kind: 'first', why: ['Nothing logged yet, so this session sets the baseline.'] }
+      const rowWeights = startW > 0 ? rowsFor(startW) : null
+      return {
+        policy, kind: 'first',
+        ...(startW > 0 ? { weight: startW } : {}),
+        reps: rangeR.repsMin,
+        ...(rowWeights ? { rowWeights } : {}),
+        why: ['Nothing logged yet, so this session sets the baseline.']
+      }
+    }
     if (steady) return { policy, kind: 'first', reps: rangeS.repsMin, rowReps: Array(Math.max(1, cfg.sets || 1)).fill(rangeS.repsMin), why: ['Nothing logged yet, so this session sets the baseline.'] }
     if (triple) return { policy, kind: 'first', reps: range3.repsMin, sets: sets3.setsMin, rowReps: startRows(range3.repsMin), why: ['Nothing logged yet, so this session sets the baseline.'] }
     return { policy, kind: 'first', why: ['Nothing logged yet, so this session sets the baseline.'] }
@@ -614,6 +711,12 @@ export function nextPrescription(S, cfg, routine) {
       const aim = set ? range3.repsMin : Math.min(range3.reps, Math.max(range3.repsMin, last.low + repStep(cfg)))
       return { policy, kind: 'hold', ...held, reps: aim, sets: sets3.setsMin, rowReps: startRows(aim), why }
     }
+    if (rpt) {
+      const prevReps = last.topSet ? last.topSet.r : last.low
+      const aim = set ? rangeR.repsMin : Math.min(rangeR.reps, Math.max(rangeR.repsMin, prevReps + repStep(cfg)))
+      const rowWeights = held.weight > 0 ? rowsFor(held.weight) : null
+      return { policy, kind: 'hold', ...held, reps: aim, ...(rowWeights ? { rowWeights } : {}), why }
+    }
     if (policy === 'double' || steady) {
       const range = normalizeRepRange(cfg.reps || last.goal || 10, cfg.repsMin, repStep(cfg))
       // A new weight starts at the bottom of the range, the way a raise does: the reps managed
@@ -624,7 +727,7 @@ export function nextPrescription(S, cfg, routine) {
     return { policy, kind: 'hold', ...held, reps: cfg.reps || undefined, why }
   }
 
-  const stalls = stallCount(sessions, policy)
+  const stalls = stallCount(sessions, policy, cfg)
   const deloadAt = DELOAD_AFTER[policy] || 3
 
   if (mode === 'time') {
@@ -676,7 +779,13 @@ export function nextPrescription(S, cfg, routine) {
   // 0 kg. Climbing its reps as though it were a push-up turned a 2 × 10 bench into 2 × 11, 12…
   // There is nothing to progress from, so it asks for the weight: the plan's, when it has one.
   // Only a bar, a bell, a stack or a sled gets here; an ab wheel at 0 climbed reps above.
-  if (w <= 0) return { policy, kind: 'hold', ...(cfg.weight > 0 ? { weight: cfg.weight } : {}), why: ['No weight logged last time. Enter what you lift and progression takes it from there.'] }
+  if (w <= 0) {
+    if (rpt && cfg.weight > 0) {
+      const rowWeights = rowsFor(cfg.weight)
+      return { policy, kind: 'hold', weight: cfg.weight, reps: rangeR.repsMin, ...(rowWeights ? { rowWeights } : {}), why: ['No weight logged last time. Enter what you lift and progression takes it from there.'] }
+    }
+    return { policy, kind: 'hold', ...(cfg.weight > 0 ? { weight: cfg.weight } : {}), ...(rpt ? { reps: rangeR.repsMin } : {}), why: ['No weight logged last time. Enter what you lift and progression takes it from there.'] }
+  }
 
   // Epley deloads apply only to externally loaded rep work. Keep the prescribed target from the
   // session that stalled (falling back field-by-field to the current config), while the logged
@@ -684,7 +793,7 @@ export function nextPrescription(S, cfg, routine) {
   const epleyDeload = () => {
     // Epley reads load as the work done; on an assistance machine it is the work taken away.
     if (assisted) return null
-    if (mode !== 'reps' || (policy !== 'linear' && policy !== 'double' && policy !== 'steady')) return null
+    if (mode !== 'reps' || (policy !== 'linear' && policy !== 'double' && policy !== 'steady' && policy !== 'rpt')) return null
     const previous = last.target || {}
     const target = {
       ...cfg,
@@ -710,7 +819,7 @@ export function nextPrescription(S, cfg, routine) {
       step: inc,
       factor: deloadFactorOf(cfg),
       reps: target.reps,
-      repsMin: policy === 'double' || policy === 'steady' ? target.repsMin : undefined,
+      repsMin: policy === 'double' || policy === 'steady' || policy === 'rpt' ? target.repsMin : undefined,
       perSide: isPerSide(target),
       owned
     })
@@ -777,6 +886,74 @@ export function nextPrescription(S, cfg, routine) {
     return out('up', harder(w, inc), startRows(bottom), assisted
       ? ['Top of the range on all {0} sets. {1} {2} less help, back to {3} sets of {4}.', n, inc, unit, setsMin, bottom]
       : ['Top of the range on all {0} sets. {1} {2} more, back to {3} sets of {4}.', n, inc, unit, setsMin, bottom])
+  }
+
+  if (rpt) {
+    const top = rangeR.reps
+    const bottom = rangeR.repsMin
+    const step = repStep(cfg)
+    const set1 = last.topSet
+    const prescribedTop = Number(last.target?.weight) || 0
+    const atTopLoad = !(prescribedTop > 0) || (set1 && (assisted ? set1.w <= prescribedTop + 0.05 : set1.w >= prescribedTop - 0.05))
+    const withRows = (base, targetW) => {
+      const rw = rowsFor(targetW)
+      return rw ? { ...base, rowWeights: rw } : base
+    }
+    if (stalls >= deloadAt) {
+      const selected = epleyDeload()
+      if (selected) return withRows(selected, selected.weight)
+      const dw = easier(w)
+      return withRows({
+        policy, kind: 'deload', weight: dw, reps: bottom,
+        why: assisted
+          ? ['Stuck for {0} sessions. Back to {1} {2} of help, then build up again.', stalls, dw, unit]
+          : ['Stuck for {0} sessions. Deload to {1} {2}.', stalls, dw, unit]
+      }, dw)
+    }
+    if (!set1 || !atTopLoad) {
+      const holdW = set1 && set1.firstRow && set1.w > 0 ? set1.w : w
+      const aim = set1 && set1.firstRow && set1.r >= bottom
+        ? Math.min(top, Math.max(bottom, set1.r >= top ? top : set1.r + step))
+        : bottom
+      return withRows({
+        policy, kind: 'hold', weight: holdW, reps: aim,
+        why: set1 && set1.firstRow
+          ? ['Top set was lighter than planned. Hold {0} {1} and aim for {2} reps.', holdW, unit, aim]
+          : ['Top set missed {0} reps last time. Same weight again ({1} of {2} to go).', bottom, deloadAt - stalls, deloadAt]
+      }, holdW)
+    }
+    if (set1.r >= top) {
+      const minRir = rptTopMinRirOf(cfg)
+      const scale = effortOf(S)
+      const effortEnforced = minRir > 0 && scale !== 'none' && set1.rir != null
+      if (effortEnforced && set1.rir < minRir - 1e-9) {
+        const loggedVal = scale === 'rpe' ? Math.round((10 - set1.rir) * 10) / 10 : Math.round(set1.rir * 10) / 10
+        const why = scale === 'rpe'
+          ? ['Top set hit {0} reps at RPE {1} (above RPE {2}). Hold {3} {4} until it moves cleaner.', set1.r, loggedVal, 10 - minRir, w, unit]
+          : ['Top set hit {0} reps with {1} RIR (need {2}+ RIR). Hold {3} {4} until you have more in reserve.', set1.r, loggedVal, minRir, w, unit]
+        return withRows({ policy, kind: 'hold', weight: w, reps: top, why }, w)
+      }
+      if (topped(w)) return withRows(toppedOut(w, { reps: top }), w)
+      const up = harder(w, inc)
+      const by = owned ? Math.round((up - w) * 100) / 100 : inc
+      return withRows({
+        policy, kind: 'up', weight: up, reps: bottom,
+        why: assisted
+          ? ['Top set hit {0} reps. {1} {2} less help, back to {3} reps.', set1.r, inc, unit, bottom]
+          : ['Top set hit {0} reps. {1} {2} more, back to {3} reps.', set1.r, by, unit, bottom]
+      }, up)
+    }
+    if (set1.r >= bottom) {
+      const aim = Math.min(top, Math.max(bottom, set1.r + step))
+      return withRows({
+        policy, kind: 'hold', weight: w, reps: aim,
+        why: ['Top set hit {0} reps. Same weight, aim for {1} reps next.', set1.r, aim]
+      }, w)
+    }
+    return withRows({
+      policy, kind: 'hold', weight: w, reps: bottom,
+      why: ['Top set missed {0} reps last time. Same weight again ({1} of {2} to go).', bottom, deloadAt - stalls, deloadAt]
+    }, w)
   }
 
   if (steady) {
@@ -974,8 +1151,8 @@ function undulatingPrescription(S, cfg, { policy, inc, unit, owned, assisted }) 
  * isAssisted): an assistance machine, whose warm-ups ramp down from more help instead.
  */
 export function applyPrescription(sets, p, step = 2.5, floor = 0, assisted = false) {
-  // A first session has nothing to prescribe from, except triple progression's start of a cycle.
-  if (!p || p.kind === 'off' || (p.kind === 'first' && !p.rowReps)) return sets
+  // A first session has nothing to prescribe from, except triple/steady/rpt starting their range or back-offs.
+  if (!p || p.kind === 'off' || (p.kind === 'first' && !p.rowReps && !p.rowWeights && !(p.policy === 'rpt' && p.reps != null))) return sets
   const out = sets.map(s => {
     // Never rewrite a logged set (a ticked warm-up falling through here would be the data-loss
     // the cascade fix removed, two files over). The prescription speaks to the work rows; an
@@ -1035,6 +1212,20 @@ export function applyPrescription(sets, p, step = 2.5, floor = 0, assisted = fal
       out[i] = isSideSet(out[i])
         ? syncSideAggregate({ ...out[i], sides: Object.fromEntries(['L', 'R'].map(side => [side, out[i].sides[side].done ? out[i].sides[side] : { ...out[i].sides[side], r: r / 2 }])) })
         : { ...out[i], r }
+    }
+  }
+  // "Top set & back-offs" (`rpt`): per-set derived weights, applied before rerampWarmups so
+  // warm-up sets ramp toward Set 1's top load.
+  if (Array.isArray(p.rowWeights)) {
+    let k = -1
+    for (let i = 0; i < out.length; i++) {
+      if (isWarmupRow(out[i])) continue
+      k++
+      const w = p.rowWeights[Math.min(k, p.rowWeights.length - 1)]
+      if (out[i].done || !(w > 0)) continue
+      out[i] = isSideSet(out[i])
+        ? syncSideAggregate({ ...out[i], sides: Object.fromEntries(['L', 'R'].map(side => [side, out[i].sides[side].done ? out[i].sides[side] : { ...out[i].sides[side], w }])) })
+        : { ...out[i], w }
     }
   }
   // Last, because the work rows now carry their final weight: the warm-up block ramps toward

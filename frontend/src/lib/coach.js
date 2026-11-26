@@ -501,6 +501,9 @@ const CHANGE_APPLY = {
     if (Number.isInteger(a.repsMin)) e.repsMin = a.repsMin
     if (Number.isInteger(a.repsMax)) e.repsMax = a.repsMax
     if (Number.isInteger(a.setsMax)) e.setsMax = a.setsMax   // triple progression's set ceiling
+    if ([5, 10, 15].includes(a.backoffPct)) e.backoffPct = a.backoffPct
+    if (a.backoffMode === 'flat' || a.backoffMode === 'step') e.backoffMode = a.backoffMode
+    if ([0, 1, 2].includes(a.topMinRir)) e.topMinRir = a.topMinRir
     // Only when the Coach disagreed with the catalogue: an absent flag has always meant
     // "whatever the exercise says", and writing one out would freeze today's dataset into
     // the plan.
@@ -582,8 +585,13 @@ const CHANGE_APPLY = {
         // The same targets and defaults as 'add-exercise': a cardio entry used to get reps (#640).
         ...(e.mode === 'cardio' ? { min: e.min || 20, speed: e.speed || 8 }
           : e.mode === 'time' ? { sec: e.sec || 45 } : { reps: e.reps || 10 }),
+        ...(Number.isInteger(e.repsMin) ? { repsMin: e.repsMin } : {}),
         ...(Number.isInteger(e.repsMax) ? { repsMax: e.repsMax } : {}),
         ...(Number.isInteger(e.setsMax) ? { setsMax: e.setsMax } : {}),
+        ...(POLICIES.includes(e.prog) ? { prog: e.prog } : {}),
+        ...([5, 10, 15].includes(e.backoffPct) ? { backoffPct: e.backoffPct } : {}),
+        ...(e.backoffMode === 'flat' || e.backoffMode === 'step' ? { backoffMode: e.backoffMode } : {}),
+        ...([0, 1, 2].includes(e.topMinRir) ? { topMinRir: e.topMinRir } : {}),
         ...(e.bodyweight != null ? { bodyweight: !!e.bodyweight } : {}),
         ...(e.side ? { side: true } : {})
       }))

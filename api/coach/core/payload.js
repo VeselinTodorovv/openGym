@@ -86,7 +86,7 @@ const weekday = d => (typeof d === 'number' ? d : typeof d === 'string' && /^\d$
 // any id an import or an older build ever wrote, and no room for a paragraph.
 export const ID_MAX = 64;
 // The progression engine's policies (frontend/src/lib/progression.js POLICIES, validate.js).
-const POLICIES = ['off', 'linear', 'greyskull', 'double', 'steady', 'triple', 'undulating', 'density', 'ladder', 'time'];
+const POLICIES = ['off', 'linear', 'greyskull', 'double', 'steady', 'triple', 'rpt', 'undulating', 'density', 'ladder', 'time'];
 const ident = v => (typeof v === 'string' ? v.slice(0, ID_MAX) : typeof v === 'number' && Number.isFinite(v) ? v : null);
 const policy = v => (POLICIES.includes(v) ? v : null);
 // A finite number, or a number written as a short string (the app writes numbers, but a
@@ -162,11 +162,24 @@ export const isWarmupSet = s => {
   if (ph) return ph === 'warmup' || ph === 'warm-up' || ph === 'warm_up';
   return s?.warmup === true;
 };
+const isAssisted = (cfg, ex) =>
+  (typeof cfg?.assisted === 'boolean' ? cfg.assisted
+    : typeof ex?.assisted === 'boolean' ? ex.assisted
+      : ex?.eq === 'leverage machine' && /\bassist(ed)?\b/i.test(String(ex?.n || '')));
+const isSideRow = s => !!(s?.sides && typeof s.sides === 'object' && s.sides.L && s.sides.R);
+const rptRangeOf = (reps, repsMin, stride = 1) => {
+  const align = v => Math.max(stride, Math.ceil(v / stride) * stride);
+  const pos = (v, fb) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.max(1, Math.round(n)) : fb; };
+  const upper = align(pos(reps, 10));
+  const lower = align(pos(repsMin, Math.max(1, upper - 2)));
+  return lower >= upper ? { reps: lower + stride, repsMin: lower } : { reps: upper, repsMin: lower };
+};
 function readSession(entry, fallback) {
   const target = (entry && entry.target) || fallback || {};
   const ex = LIB_BY_ID.get(entry?.id);
-  const mode = modeOf(target, ex);
-  const bw = isBw(target, ex);
+  const merged = { ...(fallback || {}), ...target };
+  const mode = modeOf(merged, ex);
+  const bw = isBw(merged, ex);
   const logged = ((entry && entry.sets) || []).filter(s => !isWarmupSet(s));
   // Triple progression's per-set aims (frontend readSession): only on the session's own target.
   const rowGoals = mode === 'reps' && entry && entry.target && Array.isArray(target.rowReps) && target.rowReps.length
@@ -188,11 +201,34 @@ function readSession(entry, fallback) {
     const held = sets.map(s => (s.done ? (s.sec || 0) : 0));
     return { mode, bw, goal, ok: goal > 0 && enough && held.length > 0 && held.every(h => h >= goal) };
   }
-  const goal = rowGoals ? Math.max(...rowGoals) : (target.reps || 0);
-  const reps = sets.map(s => (s.done ? (s.r || 0) : 0));
   // Set count is the dimension bodyweight work grows once reps hit their ceiling (upstream
   // #33), so it travels alongside the reps rather than being inferred from them downstream.
   const done = logged.filter(s => s.done).length;
+  const assisted = isAssisted(merged, ex);
+  const doneWeights = sets.filter(s => s.done).map(s => Number(s.w) || 0);
+  const loadedWeights = doneWeights.filter(w => w > 0);
+  const baseWeight = !assisted ? Math.max(0, ...doneWeights) : (loadedWeights.length ? Math.min(...loadedWeights) : 0);
+  // "Top set & back-offs" (`rpt`): Set 1 (the first completed non-warmup set) decides whether
+  // the session stayed inside the rep range; back-off sets never invent a stall. Unloaded 0 kg
+  // bodyweight degrades to the ordinary all-sets bodyweight rule, matching progression.js.
+  const isRpt = !!(entry?.target?.rpt || Array.isArray(entry?.target?.rowWeights) || (target.prog || fallback?.prog) === 'rpt')
+    && !(bw && baseWeight <= 0 && !(Number(target.weight) > 0));
+  if (isRpt) {
+    const stride = isPerSide(merged) ? 2 : 1;
+    const range = rptRangeOf(target.reps || fallback?.reps || 10, target.repsMin ?? fallback?.repsMin, stride);
+    const firstDone = logged.find(s => s && s.done) || null;
+    const firstW = !firstDone ? 0 : isSideRow(firstDone)
+      ? (assisted
+        ? Math.max(Number(firstDone.sides.L?.w) || 0, Number(firstDone.sides.R?.w) || 0)
+        : Math.min(Number(firstDone.sides.L?.w) || 0, Number(firstDone.sides.R?.w) || 0))
+      : (Number(firstDone.w) || 0);
+    const prescribedTop = Number(entry?.target?.weight) || 0;
+    const atTopLoad = !(prescribedTop > 0) || (firstDone && (assisted ? firstW <= prescribedTop + 0.05 : firstW >= prescribedTop - 0.05));
+    const ok = !!(firstDone && (Number(firstDone.r) || 0) >= range.repsMin && (atTopLoad || firstDone === logged[0]));
+    return { mode, bw, goal: range.reps, count: done, ok };
+  }
+  const goal = rowGoals ? Math.max(...rowGoals) : (target.reps || 0);
+  const reps = sets.map(s => (s.done ? (s.r || 0) : 0));
   return { mode, bw, goal, count: done, ok: goal > 0 && enough && reps.length > 0 && reps.every((r, k) => r >= (rowGoals ? rowGoals[k] ?? goal : goal)) };
 }
 /** Consecutive misses counting back from the most recent session. */
@@ -219,6 +255,11 @@ function cleanEx(e) {
   put('repsMax', e.repsMax);
   // Triple progression's set ceiling: `sets` is where its cycle starts, `setsMax` where it ends.
   put('setsMax', e.setsMax);
+  if (mode === 'reps') {
+    if ([5, 10, 15].includes(Number(e.backoffPct))) o.backoffPct = Number(e.backoffPct);
+    if (e.backoffMode === 'flat' || e.backoffMode === 'step') o.backoffMode = e.backoffMode;
+    if (e.topMinRir === 0 || e.topMinRir === 1 || e.topMinRir === 2) o.topMinRir = e.topMinRir;
+  }
   // Written out only when they disagree with the catalogue, matching plan-share.js — an
   // absent flag has always meant "whatever the exercise says", and still does.
   if (e.bodyweight != null) o.bodyweight = !!e.bodyweight;
@@ -393,7 +434,7 @@ function aggregates(S, workouts) {
   // Per-exercise stall/deload picture, computed over the same sessions the engine would see.
   const byEx = new Map();
   const planCfg = new Map();
-  (S.routines || []).forEach(r => (r.ex || []).forEach(e => planCfg.set(e.id, e)));
+  (S.routines || []).forEach(r => (r.ex || []).forEach(e => planCfg.set(e.id, r.prog && !e.prog ? { ...e, prog: r.prog } : e)));
   (S.workouts || []).forEach(w => (w.entries || []).forEach(en => {
     if (!en.sets?.some(s => s.done)) return;
     if (!byEx.has(en.id)) byEx.set(en.id, []);

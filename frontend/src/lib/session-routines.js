@@ -67,7 +67,11 @@ function copiedEntry(entry, source) {
   // A saved entry can retain planned rows after an early finish. Match history.js lastEntryFor:
   // only a fully completed work row may seed the copied target. A partially checked per-side row
   // is still retained by buildCompletedWorkout, but its two-limb state cannot fit a flat routine.
-  const row = work.filter(candidate => candidate?.done === true).at(-1) || null
+  // Under "Top set & back-offs" (`rpt`) the first completed work set is the top set; the trailing
+  // sets are lighter back-offs derived from it, so copying the last set would save a back-off load.
+  const isRpt = (entry?.target?.prog || source?.prog) === 'rpt' || !!entry?.target?.rpt || Array.isArray(entry?.target?.rowWeights)
+  const doneWork = work.filter(candidate => candidate?.done === true)
+  const row = (isRpt ? doneWork[0] : doneWork.at(-1)) || null
   const target = entry?.target && typeof entry.target === 'object'
     ? structuredClone(entry.target)
     : {}
@@ -125,8 +129,9 @@ function copiedEntry(entry, source) {
   return cfg
 }
 
-// `rowReps` is one session's per-set aim under triple progression (progression.js), not a plan.
-const SESSION_ONLY = ['planned', 'plan', 'carried', 'rid', 'noProg', 'muscleSnapshot', 'rowReps']
+// `rowReps` is one session's per-set aim under triple progression (progression.js), and
+// `rowWeights` / `rpt` are one session's derived back-off targets under RPT — none is a plan.
+const SESSION_ONLY = ['planned', 'plan', 'carried', 'rid', 'noProg', 'muscleSnapshot', 'rowReps', 'rowWeights', 'rpt']
 
 // `routines` are the ones the session was built from, when they still exist: the rule each copied
 // exercise is read under comes from there (see copiedEntry).

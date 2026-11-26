@@ -793,3 +793,36 @@ test('a plan note is held to a cue or two', () => {
   assert.equal(r.ok, true);
   assert.ok(r.bundle.routines[0].ex[0].note.length <= 301);
 });
+
+test('Top set & back-offs (`rpt`) policy and config fields survive created plans and reviews', () => {
+  const created = validatePlan({
+    routines: [{
+      id: 'r1', name: 'Upper', prog: 'rpt',
+      ex: [
+        { id: '0009', sets: 3, reps: 10, repsMin: 7, prog: 'rpt', backoffPct: 15, backoffMode: 'step', topMinRir: 0 },
+        { id: '0043', sets: 3, reps: 10, prog: 'rpt', backoffPct: 99, backoffMode: 'wild', topMinRir: 9 }
+      ]
+    }]
+  });
+  assert.equal(created.ok, true);
+  assert.equal(created.bundle.routines[0].prog, 'rpt');
+  assert.deepEqual(
+    [created.bundle.routines[0].ex[0].prog, created.bundle.routines[0].ex[0].backoffPct, created.bundle.routines[0].ex[0].backoffMode, created.bundle.routines[0].ex[0].topMinRir],
+    ['rpt', 15, 'step', 0]
+  );
+  assert.equal(created.bundle.routines[0].ex[1].backoffPct, undefined);
+  assert.equal(created.bundle.routines[0].ex[1].backoffMode, undefined);
+  assert.equal(created.bundle.routines[0].ex[1].topMinRir, undefined);
+
+  assert.equal(review([change({ type: 'exercise-prog', after: 'rpt' })]).ok, true);
+  assert.equal(review([change({ type: 'routine-prog', target: { routineId: 'r1' }, after: 'rpt' })]).ok, true);
+  const added = review([change({
+    type: 'add-exercise', target: { routineId: 'r1' },
+    after: { id: '0009', sets: 3, reps: 10, repsMin: 7, prog: 'rpt', backoffPct: 5, backoffMode: 'step', topMinRir: 2 }
+  })]);
+  assert.equal(added.ok, true);
+  assert.deepEqual(
+    [added.proposal.changes[0].after.prog, added.proposal.changes[0].after.backoffPct, added.proposal.changes[0].after.backoffMode, added.proposal.changes[0].after.topMinRir],
+    ['rpt', 5, 'step', 2]
+  );
+});

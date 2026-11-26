@@ -637,6 +637,8 @@ export const previewSession = {
           sets: plan.sets != null ? plan.sets : undefined,
           // Triple progression aims each set on its own ("12, 12, 12, 9"); `reps` is the first set's.
           row_reps: Array.isArray(plan.rowReps) ? plan.rowReps : undefined,
+          // "Top set & back-offs" (`rpt`) derives a per-set load array; `weight` is Set 1's top load.
+          row_weights: Array.isArray(plan.rowWeights) ? plan.rowWeights : undefined,
           sec: plan.sec != null ? plan.sec : undefined,
           why: plan.why ? fmt(plan.why[0], plan.why.slice(1)) : null,
           // This week's target of a running programme, when it speaks to this exercise.
