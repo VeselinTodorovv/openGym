@@ -71,7 +71,7 @@ function copiedEntry(entry, source) {
   // sets are lighter back-offs derived from it, so copying the last set would save a back-off load.
   const isRpt = (entry?.target?.prog || source?.prog) === 'rpt' || !!entry?.target?.rpt || Array.isArray(entry?.target?.rowWeights)
   const doneWork = work.filter(candidate => candidate?.done === true)
-  const row = (isRpt ? doneWork[0] : doneWork.at(-1)) || null
+  const row = (isRpt ? (work[0]?.done === true ? work[0] : null) : doneWork.at(-1)) || null
   const target = entry?.target && typeof entry.target === 'object'
     ? structuredClone(entry.target)
     : {}

@@ -5922,4 +5922,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "Garder au moins deux répétitions sous le pied avant d’augmenter la charge.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "Le suivi de l’effort est désactivé : la série 1 progresse donc uniquement aux répétitions tant que RPE ou RIR n’est pas activé dans les Réglages.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "Les séries démarrent à {0}. La série 1 pilote la progression ; les séries de recul suivent.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "La série principale n’a pas été validée la dernière fois. Même charge à nouveau ({0} sur {1} restantes).",
 }

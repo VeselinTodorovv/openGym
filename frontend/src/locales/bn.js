@@ -6001,4 +6001,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "ওজন বাড়ানোর আগে হাতে অন্তত দুটি রেপ বাকি রাখুন।",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "প্রচেষ্টা ট্র্যাকিং বন্ধ আছে, তাই সেটিংসে RPE বা RIR চালু না করা পর্যন্ত সেট ১ শুধু রেপের ভিত্তিতেই এগোবে।",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "সেটগুলো শুরু হবে {0}-এ। সেট ১ অগ্রগতি ঠিক করে; ব্যাক-অফ সেটগুলো তাকে অনুসরণ করে।",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "গতবার টপ সেটটি লগ করা হয়নি। আবার একই ওজন ({1}-এর মধ্যে {0} বাকি)।",
 }

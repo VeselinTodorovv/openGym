@@ -5919,4 +5919,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "Залишайте щонайменше два повторення в запасі перед збільшенням ваги.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "Облік зусилля вимкнено, тому 1-й підхід прогресує лише за повтореннями, доки ви не ввімкнете RPE або RIR у Налаштуваннях.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "Підходи починаються з {0}. 1-й підхід веде прогресію, а бек-офф підходи слідують за ним.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "Минулого разу топ-сет не було відмічено. Знову та сама вага (залишилось {0} із {1}).",
 }

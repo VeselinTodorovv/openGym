@@ -5922,4 +5922,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "Ağırlık eklemeden önce cepte en az iki tekrar bırakın.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "Efor takibi kapalı; Ayarlar’dan RPE veya RIR açılmadıkça 1. set yalnızca tekrar sayısına göre ilerler.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "Setler {0} ile açılır. İlerlemeyi 1. set yönetir; back-off setleri onu izler.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "Zirve seti geçen sefer kaydedilmedi. Yine aynı ağırlık ({1} hakta {0} kaldı).",
 }

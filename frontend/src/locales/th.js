@@ -5933,4 +5933,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "เหลือแรงไว้อย่างน้อยสองครั้งก่อนเพิ่มน้ำหนัก",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "การบันทึกความหนักปิดอยู่ เซ็ต 1 จึงเลื่อนขั้นจากจำนวนครั้งเพียงอย่างเดียว เว้นแต่คุณจะเปิด RPE หรือ RIR ในการตั้งค่า",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "เซ็ตเริ่มที่ {0} เซ็ต 1 เป็นตัวนำการก้าวหน้า และเซ็ตแบ็กออฟจะขยับตาม",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "ท็อปเซ็ตไม่ได้ถูกบันทึกในรอบก่อน ใช้เวทเดิมอีกครั้ง (เหลืออีก {0} จาก {1})",
 }

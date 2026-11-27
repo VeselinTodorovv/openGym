@@ -158,14 +158,30 @@ test('readSession and cleanPlan agree with the frontend on Top set & back-offs (
   assert.equal(benchAgg(buildRpt([hitWithBackoffMiss, hitWithBackoffMiss, set1Miss])).lastOk, false);
   assert.equal(benchAgg(buildRpt([hitWithBackoffMiss, hitWithBackoffMiss, set1Miss])).stalls, 1);
 
-  // Set 1 left unchecked while lighter Set 2 was ticked -> miss on both sides.
+  // Set 1 left unchecked while Set 2 was ticked (even at equal bar-floor load) -> miss on both sides.
   const skippedTop = rptEntry([
     { w: 80, r: 10, done: false },
-    { w: 67.5, r: 10, done: true },
-    { w: 55, r: 10, done: true },
+    { w: 80, r: 10, done: true },
+    { w: 80, r: 10, done: true },
   ]);
   assert.equal(frontendReadSession(skippedTop, rptPlan).ok, false);
   assert.equal(benchAgg(buildRpt([hitWithBackoffMiss, hitWithBackoffMiss, skippedTop])).lastOk, false);
+
+  // Omitted `repsMin` (default 8..10 from reps: 10) with session aim 8 in target.reps grades 7 reps as a miss on both sides.
+  const noMinPlan = { id: BENCH_ID, sets: 3, reps: 10, mode: 'reps', weight: 80, prog: 'rpt' };
+  const noMinEntry = {
+    id: BENCH_ID,
+    planned: { sets: 3, reps: 10, weight: 80 },
+    target: { sets: 3, reps: 8, weight: 80, prog: 'rpt', rpt: { pct: 10, mode: 'flat' }, rowWeights: [80, 72.5, 72.5] },
+    sets: [{ w: 80, r: 7, done: true }, { w: 72.5, r: 8, done: true }, { w: 72.5, r: 8, done: true }],
+  };
+  const pNoMin = payload.build(sampleState({
+    routines: [{ id: 'r-nomin', name: 'Push', ex: [noMinPlan] }],
+    workouts: [noMinEntry].map((en, i) => ({ id: 'wnm' + i, d: '2026-08-10', name: 'Push', start: 1000, end: 2000, entries: [en] })),
+  }), { handle: handleFor('u_parity'), kind: 'review' });
+  assert.equal(frontendReadSession(noMinEntry, noMinPlan).ok, false);
+  assert.equal(benchAgg(pNoMin).lastOk, false);
+  assert.equal(benchAgg(pNoMin).stalls, 1);
 
   // Adjustment #4: inherited routine-level `rpt` on a 0 kg bodyweight exercise grades all sets like ordinary bodyweight.
   const bwPlan = { id: EX_ID, sets: 3, reps: 10, mode: 'reps', weight: 0, bodyweight: true };

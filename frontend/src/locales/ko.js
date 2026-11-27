@@ -5922,4 +5922,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "중량을 올리기 전에 최소 두 번 더 들 여유를 남깁니다.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "강도 기록이 꺼져 있어 설정에서 RPE나 RIR을 켜기 전까지는 1세트가 반복 수만으로 증량됩니다.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "세트가 {0}(으)로 시작합니다. 1세트가 증량을 이끌고 백오프 세트가 뒤따릅니다.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "지난번 탑 세트를 기록하지 않았습니다. 같은 중량으로 다시 갑니다 ({1}번 중 {0}번 남음).",
 }

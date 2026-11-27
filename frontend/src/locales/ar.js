@@ -5977,4 +5977,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "اترك تكرارين على الأقل في الاحتياط قبل زيادة الوزن.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "تتبّع الجهد متوقف، لذا تتقدّم المجموعة 1 حسب التكرارات وحدها ما لم تفعّل RPE أو RIR في الإعدادات.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "تبدأ المجموعات عند {0}. المجموعة 1 تقود التقدّم، ومجموعات التخفيف تتبعها.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "لم تُسجَّل مجموعة القمة في المرة الماضية. الوزن نفسه مجددًا (بقي {0} من {1}).",
 }

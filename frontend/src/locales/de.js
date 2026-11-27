@@ -5942,4 +5942,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "Mindestens zwei Wiederholungen im Tank lassen, bevor Gewicht dazukommt.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "Die Anstrengungserfassung ist aus, daher steigert Satz 1 nur über Wiederholungen, solange du RPE oder RIR nicht in den Einstellungen aktivierst.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "Sätze starten bei {0}. Satz 1 steuert die Progression; die Back-off-Sätze ziehen mit.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "Der Topsatz wurde letztes Mal nicht eingetragen. Gleiches Gewicht noch einmal (noch {0} von {1}).",
 }

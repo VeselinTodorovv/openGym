@@ -5918,4 +5918,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "Prieš didindami svorį palikite bent du pakartojimus atsargoje.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "Pastangų žymėjimas išjungtas, todėl 1 priėjimas progresuoja vien pagal pakartojimus, nebent Nustatymuose įjungsite RPE arba RIR.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "Priėjimai prasideda nuo {0}. 1 priėjimas valdo progresą, o lengvesni priėjimai seka paskui.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "Pagrindinis priėjimas praėjusį kartą nebuvo pažymėtas. Tas pats svoris dar kartą (liko {0} iš {1}).",
 }

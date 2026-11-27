@@ -5969,4 +5969,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "Lämna minst två reps i tanken innan du höjer vikten.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "Ansträngningsspårning är av, så set 1 ökar enbart på reps om du inte slår på RPE eller RIR i Inställningar.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "Seten öppnar på {0}. Set 1 styr progressionen; back-off-seten följer med.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "Toppsetet loggades inte senast. Samma vikt igen ({0} av {1} kvar).",
 }

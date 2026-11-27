@@ -5888,4 +5888,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "Před přidáním váhy nechte v rezervě alespoň dvě opakování.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "Sledování úsilí je vypnuté, takže 1. série postupuje jen podle opakování, dokud v Nastavení nezapnete RPE nebo RIR.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "Série začínají na {0}. 1. série řídí progres a back-off série ji následují.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "Top série nebyla minule zapsaná. Znovu stejná váha (zbývá {0} ze {1}).",
 }

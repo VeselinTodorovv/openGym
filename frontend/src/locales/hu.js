@@ -5925,4 +5925,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "Hagyj legalább két ismétlést tartalékban súlynövelés előtt.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "Az erőfeszítés követése ki van kapcsolva, így az 1. sorozat csak az ismétlések alapján lép tovább, amíg be nem kapcsolod az RPE-t vagy a RIR-t a Beállításokban.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "A sorozatok innen indulnak: {0}. Az 1. sorozat vezérli a fejlődést, a back-off sorozatok követik.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "A csúcssorozatot legutóbb nem naplóztad. Ugyanez a súly újra ({1}-ből még {0}).",
 }

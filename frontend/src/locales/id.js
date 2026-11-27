@@ -5887,4 +5887,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "Sisakan minimal dua repetisi di cadangan sebelum menambah beban.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "Pelacakan usaha mati, jadi set 1 naik hanya dari repetisi kecuali RPE atau RIR dinyalakan di Pengaturan.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "Set dibuka pada {0}. Set 1 mengatur progres; set back-off mengikutinya.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "Set puncak tidak tercatat terakhir kali. Beban tetap sama ({0} dari {1} lagi).",
 };

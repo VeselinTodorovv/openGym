@@ -368,7 +368,6 @@ export function readSession(entry, fallback) {
   const goal = rowGoals ? Math.max(...rowGoals) : (target.reps || 0)
   const mergedCfg = { ...(fallback || {}), ...target, id: entry?.id || target.id || fallback?.id }
   const assistedEntry = isAssisted(mergedCfg)
-  const firstDone = logged.find(s => s && s.done) || null
   const setLoad = s => {
     if (!s) return 0
     if (isSideSet(s)) {
@@ -377,23 +376,32 @@ export function readSession(entry, fallback) {
     }
     return Number(s.w) || 0
   }
-  const topSet = firstDone ? {
-    w: setLoad(firstDone),
-    r: Number(firstDone.r) || 0,
-    rir: rirOf(firstDone),
-    firstRow: firstDone === logged[0],
+  const firstWork = logged[0] || null
+  const firstRowWeight = setLoad(firstWork)
+  const topSet = firstWork && firstWork.done ? {
+    w: firstRowWeight,
+    r: Number(firstWork.r) || 0,
+    rir: rirOf(firstWork),
+    firstRow: true,
   } : null
   const baseWeight = loadOf(entry, sets)
   const isRpt = mode === 'reps'
     && !!(entry?.target?.rpt || Array.isArray(entry?.target?.rowWeights) || (target.prog || fallback?.prog) === 'rpt')
     && !(isBw(mergedCfg) && baseWeight <= 0 && !(Number(target.weight) > 0))
   if (isRpt) {
-    const range = normalizeRepRange(target.reps || fallback?.reps || 10, target.repsMin ?? fallback?.repsMin, repStep(mergedCfg))
+    const plannedSpec = entry?.planned || fallback || target
+    const range = normalizeRepRange(
+      plannedSpec.reps || target.reps || 10,
+      plannedSpec.repsMin ?? target.repsMin,
+      repStep(mergedCfg)
+    )
     const prescribedTop = Number(entry?.target?.weight) || 0
-    const atTopLoad = !(prescribedTop > 0) || (topSet && (assistedEntry ? topSet.w <= prescribedTop + 0.05 : topSet.w >= prescribedTop - 0.05))
+    const harderAttempt = prescribedTop > 0 && topSet
+      && (assistedEntry ? topSet.w < prescribedTop - 0.05 : topSet.w > prescribedTop + 0.05)
+    const hitMin = !!(topSet && topSet.r >= range.repsMin)
     const weight = topSet
-      ? (!topSet.firstRow && !atTopLoad ? prescribedTop : topSet.w)
-      : (prescribedTop > 0 ? prescribedTop : baseWeight)
+      ? (harderAttempt && !hitMin ? prescribedTop : topSet.w)
+      : (prescribedTop > 0 ? prescribedTop : (firstRowWeight || baseWeight))
     const reps = sets.map(s => (s.done ? (s.r || 0) : 0))
     return {
       mode, target, goal: range.reps, reps,
@@ -402,7 +410,7 @@ export function readSession(entry, fallback) {
       low: reps.length ? Math.min(...reps) : 0,
       amrap: reps.length ? reps[reps.length - 1] : 0,
       ...(topSet ? { topSet } : {}),
-      ok: !!(topSet && topSet.r >= range.repsMin && (atTopLoad || topSet.firstRow)),
+      ok: hitMin,
     }
   }
   // Back-off sets (lib/backoff.js): each planned set after the first is held to its own weight,
@@ -509,7 +517,12 @@ export function stallCount(sessions, policy, cfg) {
   for (let i = sessions.length - 1; i >= 0; i--) {
     if (sessions[i].ok) break
     if (policy === 'rpt' && cfg) {
-      const range = normalizeRepRange(cfg.reps || sessions[i].goal || 10, cfg.repsMin, repStep(cfg))
+      const plannedSpec = sessions[i].planned || cfg
+      const range = normalizeRepRange(
+        plannedSpec.reps || cfg.reps || sessions[i].goal || 10,
+        plannedSpec.repsMin ?? cfg.repsMin,
+        repStep(cfg)
+      )
       const ts = sessions[i].topSet
       const metLoad = ts && (isAssisted(cfg) ? ts.w <= sessions[i].weight + 0.05 : ts.w >= sessions[i].weight - 0.05)
       if (ts && ts.firstRow && metLoad && ts.r >= range.repsMin) break
@@ -814,14 +827,18 @@ export function nextPrescription(S, cfg, routine, opts = {}) {
     // are already removed by readSession; bodyweight (including added-weight bodyweight) stays
     // on the ordinary non-load progression path.
     if (isBw(target) || target.intensifier?.type === 'restpause') return null
+    const deloadReps = policy === 'rpt' ? rangeR.reps : target.reps
+    const deloadRepsMin = policy === 'rpt'
+      ? rangeR.repsMin
+      : (policy === 'double' || policy === 'steady' ? target.repsMin : undefined)
     const candidate = selectDeloadCandidate({
       currentWeight: w,
       targetWeight: target.weight,
       targetReps: target.reps,
       step: inc,
       factor: deloadFactorOf(cfg),
-      reps: target.reps,
-      repsMin: policy === 'double' || policy === 'steady' || policy === 'rpt' ? target.repsMin : undefined,
+      reps: deloadReps,
+      repsMin: deloadRepsMin,
       perSide: isPerSide(target),
       owned
     })
@@ -913,15 +930,17 @@ export function nextPrescription(S, cfg, routine, opts = {}) {
       }, dw)
     }
     if (!set1 || !atTopLoad) {
-      const holdW = set1 && set1.firstRow && set1.w > 0 ? set1.w : w
-      const aim = set1 && set1.firstRow && set1.r >= bottom
+      const holdW = set1 && set1.w > 0 ? set1.w : w
+      const aim = set1 && set1.r >= bottom
         ? Math.min(top, Math.max(bottom, set1.r >= top ? top : set1.r + step))
         : bottom
       return withRows({
         policy, kind: 'hold', weight: holdW, reps: aim,
-        why: set1 && set1.firstRow
-          ? ['Top set was lighter than planned. Hold {0} {1} and aim for {2} reps.', holdW, unit, aim]
-          : ['Top set missed {0} reps last time. Same weight again ({1} of {2} to go).', bottom, deloadAt - stalls, deloadAt]
+        why: !set1
+          ? ['Top set was not logged last time. Same weight again ({0} of {1} to go).', deloadAt - stalls, deloadAt]
+          : set1.r >= bottom
+            ? ['Top set was lighter than planned. Hold {0} {1} and aim for {2} reps.', holdW, unit, aim]
+            : ['Top set missed {0} reps last time. Same weight again ({1} of {2} to go).', bottom, deloadAt - stalls, deloadAt]
       }, holdW)
     }
     if (set1.r >= top) {

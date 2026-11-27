@@ -215,16 +215,14 @@ function readSession(entry, fallback) {
     && !(bw && baseWeight <= 0 && !(Number(target.weight) > 0));
   if (isRpt) {
     const stride = isPerSide(merged) ? 2 : 1;
-    const range = rptRangeOf(target.reps || fallback?.reps || 10, target.repsMin ?? fallback?.repsMin, stride);
-    const firstDone = logged.find(s => s && s.done) || null;
-    const firstW = !firstDone ? 0 : isSideRow(firstDone)
-      ? (assisted
-        ? Math.max(Number(firstDone.sides.L?.w) || 0, Number(firstDone.sides.R?.w) || 0)
-        : Math.min(Number(firstDone.sides.L?.w) || 0, Number(firstDone.sides.R?.w) || 0))
-      : (Number(firstDone.w) || 0);
-    const prescribedTop = Number(entry?.target?.weight) || 0;
-    const atTopLoad = !(prescribedTop > 0) || (firstDone && (assisted ? firstW <= prescribedTop + 0.05 : firstW >= prescribedTop - 0.05));
-    const ok = !!(firstDone && (Number(firstDone.r) || 0) >= range.repsMin && (atTopLoad || firstDone === logged[0]));
+    const plannedSpec = entry?.planned || fallback || target;
+    const range = rptRangeOf(
+      plannedSpec.reps || target.reps || 10,
+      plannedSpec.repsMin ?? target.repsMin,
+      stride
+    );
+    const firstDone = logged[0] && logged[0].done ? logged[0] : null;
+    const ok = !!(firstDone && (Number(firstDone.r) || 0) >= range.repsMin);
     return { mode, bw, goal: range.reps, count: done, ok };
   }
   const goal = rowGoals ? Math.max(...rowGoals) : (target.reps || 0);

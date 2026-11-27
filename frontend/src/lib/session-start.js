@@ -141,7 +141,14 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
   // What the rows are built from: the routine's own, with a deload week's fewer sets.
   const rowCfg = cycle ? { ...cfg, sets: plan.sets } : cfg
   const policyKind = plan.kind
-  if (slot) plan = programmePlan(st, cfg, plan, slot, step)
+  if (slot) {
+    plan = programmePlan(st, cfg, plan, slot, step)
+    if (plan.policy === 'rpt' && !(isBw(cfg) && !(cfg.weight > 0) && !(plan.weight > 0))) {
+      const topW = plan.weight ?? (cfg.weight > 0 ? cfg.weight : 0)
+      const rw = topW > 0 ? rptRowWeights(topW, plan.sets ?? cfg.sets, cfg, { ...(rptOpts || {}), assisted: isAssisted(cfg) }) : null
+      if (rw) plan = { ...plan, rowWeights: rw }
+    }
+  }
   const planReps = !startsFromLast(st) || plan.kind === 'programme'
   const fromLast = !noProg && policyKind === 'off' && !slot && startsFromLast(st)
   // Warm-ups ramp over the dumbbells you own when the profile lists them (issue #376): a rung
@@ -183,7 +190,7 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
   // summaries and Last/Next sheets keep reading Set 1; `rowWeights` carries the derived per-set loads.
   if (Array.isArray(plan.rowWeights)) target.rowWeights = plan.rowWeights
   else delete target.rowWeights
-  if (plan.policy === 'rpt' && plan.kind !== 'programme' && !(isBw(cfg) && !(cfg.weight > 0) && !(plan.weight > 0))) {
+  if (plan.policy === 'rpt' && !(isBw(cfg) && !(cfg.weight > 0) && !(plan.weight > 0))) {
     target.rpt = { pct: rptBackoffPctOf(cfg), mode: rptBackoffModeOf(cfg) }
   } else delete target.rpt
   // The step the back-off sets were built with, kept on the session so reading it back

@@ -4351,6 +4351,7 @@ export const PT_BR_OVERRIDES = {
   "Leave at least two reps in the tank before adding weight.": "Deixe pelo menos duas repetições na reserva antes de subir o peso.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "A medição de esforço está desligada, então a série 1 avança só pelas repetições até você ativar RPE ou RIR nas Configurações.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "As séries começam em {0}. A série 1 guia a progressão; as séries de recuo acompanham.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "A série principal não foi registrada na última vez. Mesmo peso de novo ({0} de {1} restantes).",
 }
 
 export default { ...pt, ...PT_BR_OVERRIDES }

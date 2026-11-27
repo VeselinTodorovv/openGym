@@ -5888,4 +5888,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "قبل از افزایش وزنه حداقل دو تکرار در توان ذخیره نگه دارید.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "ثبت فشار تمرین خاموش است، بنابراین ست ۱ فقط بر اساس تکرار پیشرفت می‌کند مگر اینکه RPE یا RIR را در تنظیمات روشن کنید.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "ست‌ها با {0} شروع می‌شوند. ست ۱ پیشرفت را هدایت می‌کند و ست‌های کاهشی از آن پیروی می‌کنند.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "ست اصلی دفعه قبل ثبت نشد. دوباره همان وزنه ({0} از {1} باقی مانده).",
 }

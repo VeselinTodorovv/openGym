@@ -14,6 +14,7 @@ import { buildPlanBundle, parsePlan, mergePlan } from './plan-share.js'
 import { convertStateUnit } from './units.js'
 import { withExUnit } from './ex-unit.js'
 import { routineFromSession } from './session-routines.js'
+import { startProgramme } from './programmes.js'
 import { cascadeWeight } from './history.js'
 import { isWarmupRow, isSideSet, makeSideSet, setSideField, toggleSide, WEIGHT_ORIGIN_MANUAL } from './workout-model.js'
 import { EXDB, isAssisted } from './exercises.js'
@@ -543,5 +544,227 @@ describe('Live workout cascadeWeight for RPT', () => {
     const cleared = cascadeWeight(clamped, 0, null, undefined, stepSpec)
     expect(cleared[1].w).toBeUndefined()
     expect(cleared[2].w).toBeUndefined()
+  })
+})
+
+describe('Review follow-up regressions (Items 1–4 & preserved invariants)', () => {
+  it('Item 1: counts misses and deloads to bottom of range when repsMin is omitted on config', () => {
+    const cfg = { id: BENCH, sets: 3, reps: 10, weight: 80, prog: 'rpt' }
+    const r = rig(cfg)
+
+    // Session 1: 6 reps on Set 1 (< default repsMin 8) -> miss #1, 2 of 3 to go
+    r.train((s, k) => ({ r: k === 0 ? 6 : 8 }))
+    const after1 = r.open()
+    expect(after1.plan).toMatchObject({ kind: 'hold', weight: 80, reps: 8 })
+    expect(after1.plan.why.slice(1)).toEqual([8, 2, 3])
+
+    // Session 2: 7 reps on Set 1 (still < 8!) -> miss #2, 1 of 3 to go
+    r.train((s, k) => ({ r: k === 0 ? 7 : 8 }))
+    const after2 = r.open()
+    expect(after2.plan).toMatchObject({ kind: 'hold', weight: 80, reps: 8 })
+    expect(after2.plan.why.slice(1)).toEqual([8, 1, 3])
+
+    // Session 3: 6 reps on Set 1 -> miss #3 -> deload asking for 8 reps
+    r.train((s, k) => ({ r: k === 0 ? 6 : 8 }))
+    const after3 = r.open()
+    expect(after3.plan.kind).toBe('deload')
+    expect(after3.plan.weight).toBeLessThan(80)
+    expect(after3.plan.reps).toBe(8)
+  })
+
+  it('Item 1b: handles omitted repsMin on unilateral per-side sets, legacy entries without planned, and routine edits', () => {
+    const uCfg = { id: DB_BENCH, sets: 3, reps: 20, weight: 30, inc: 2, side: true, prog: 'rpt' }
+    // normalizeRepRange(20, undefined, 2) -> 18..20
+    const r = rig(uCfg)
+    expect(r.open().plan.reps).toBe(18)
+
+    // Legacy entry with no `planned` stamp and omitted `repsMin` grades against fallback's 8..10
+    const legacy = {
+      id: BENCH,
+      target: { sets: 3, reps: 8, weight: 80, prog: 'rpt' },
+      sets: [{ w: 80, r: 7, done: true }, { w: 72.5, r: 8, done: true }, { w: 72.5, r: 8, done: true }],
+    }
+    expect(readSession(legacy, { id: BENCH, sets: 3, reps: 10, weight: 80, prog: 'rpt' }).ok).toBe(false)
+
+    // Editing a routine's range later does not retroactively re-grade old sessions that carry their own `planned`
+    const oldEntry = {
+      id: BENCH,
+      planned: { sets: 3, reps: 10, repsMin: 8, weight: 80 },
+      target: { sets: 3, reps: 8, repsMin: 8, weight: 80, prog: 'rpt' },
+      sets: [{ w: 80, r: 8, done: true }, { w: 72.5, r: 8, done: true }, { w: 72.5, r: 8, done: true }],
+    }
+    expect(readSession(oldEntry, { id: BENCH, sets: 3, reps: 12, repsMin: 10, weight: 80, prog: 'rpt' }).ok).toBe(true)
+  })
+
+  it('Item 2: never lets Set 2 stand in for an unticked Set 1 (bar limit, unprescribed weight, heavier Set 2, 3x skip, half-ticked side)', () => {
+    // 1. Equal weights at bar limit (20, 20, 20 kg): skip Set 1, hit 10 reps on Set 2 -> must hold, not level up
+    const barRig = rig({ id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 20, prog: 'rpt' })
+    barRig.train((s, k) => (k === 0 ? { done: false } : { r: 10, rpe: 7 }))
+    const barNext = barRig.open()
+    expect(barNext.plan).toMatchObject({ kind: 'hold', weight: 20, reps: 7, rowWeights: [20, 20, 20] })
+    // Explanation should not claim Set 1 attempted and missed reps
+    expect(barNext.plan.why[0]).not.toContain('missed')
+
+    // 2. No prescribed weight (cfg.weight = 0), Set 1 unticked at 60 kg, Set 2 ticked at 50 kg x 10 -> hold Set 1's 60 kg
+    const openRig = rig({ id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 0, prog: 'rpt' })
+    openRig.train((s, k) => (k === 0 ? { w: 60, r: 8, done: false } : { w: 50, r: 10, rpe: 7, done: true }))
+    const openNext = openRig.open()
+    expect(openNext.plan).toMatchObject({ kind: 'hold', weight: 60, reps: 7 })
+
+    // 3. Set 2 heavier than prescribed (85 >= 80) while Set 1 unticked -> hold prescribed 80 kg, count miss, 3 skips deload
+    const skipRig = rig({ id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt' })
+    skipRig.train((s, k) => (k === 0 ? { done: false } : { w: 85, r: 10, rpe: 7 }))
+    expect(skipRig.open().plan).toMatchObject({ kind: 'hold', weight: 80, reps: 7 })
+    skipRig.train((s, k) => (k === 0 ? { done: false } : { r: 10, rpe: 7 }))
+    expect(skipRig.open().plan).toMatchObject({ kind: 'hold', weight: 80, reps: 7 })
+    skipRig.train((s, k) => (k === 0 ? { done: false } : { r: 10, rpe: 7 }))
+    expect(skipRig.open().plan.kind).toBe('deload')
+
+    // 4. Per-side Set 1 with only Left ticked and Set 2 fully ticked -> Set 1 not done, holds at prescribed 30 kg
+    const sideRig = rig({ id: DB_BENCH, sets: 2, reps: 20, repsMin: 14, weight: 30, inc: 2, side: true, prog: 'rpt' })
+    const [built] = buildSessionEntries(sideRig.st, sideRig.routine)
+    const partialSets = [
+      toggleSide(setSideField(built.sets[0], 'L', 'r', 10), 'L'),
+      toggleSide(toggleSide(setSideField(setSideField(built.sets[1], 'L', 'r', 10), 'R', 'r', 10), 'L'), 'R'),
+    ]
+    const saved = buildCompletedWorkout({
+      id: 'w-half', d: '2026-04-01', start: 1000, routineId: sideRig.routine.id, routineIds: [sideRig.routine.id], name: 'U',
+      entries: [{ ...built, rid: sideRig.routine.id, sets: partialSets }],
+    }, { end: 2000 })
+    sideRig.st = { ...sideRig.st, workouts: [saved] }
+    expect(sideRig.open().plan).toMatchObject({ kind: 'hold', weight: 30, reps: 14 })
+  })
+
+  it('Item 3: failed heavier attempt holds prescribed weight and continues stall streak; successful heavier attempts adopt lifted weight', () => {
+    const cfg = { id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt' }
+
+    // Mix of normal miss (80x5), heavier miss (90x4), normal miss (80x6) -> deloads from 80
+    const r = rig(cfg)
+    r.train((s, k) => (k === 0 ? { w: 80, r: 5 } : { r: 8 }))
+    expect(r.open().plan).toMatchObject({ kind: 'hold', weight: 80, reps: 7, rowWeights: [80, 72.5, 72.5] })
+    r.train((s, k) => (k === 0 ? { w: 90, r: 4 } : { r: 8 }))
+    expect(r.open().plan).toMatchObject({ kind: 'hold', weight: 80, reps: 7, rowWeights: [80, 72.5, 72.5] })
+    expect(stallCount(sessionsFor(r.st, BENCH, cfg, r.routine.id), 'rpt', cfg)).toBe(2)
+    r.train((s, k) => (k === 0 ? { w: 80, r: 6 } : { r: 8 }))
+    const deloaded = r.open()
+    expect(deloaded.plan.kind).toBe('deload')
+    expect(deloaded.plan.weight).toBeLessThan(80)
+
+    // Heavier in-range (90 x 8 @ RPE 8): adopts 90 kg and climbs to 9 reps
+    const rIn = rig(cfg)
+    rIn.train((s, k) => (k === 0 ? { w: 90, r: 8, rpe: 8 } : { r: 8 }))
+    expect(rIn.open().plan).toMatchObject({ kind: 'hold', weight: 90, reps: 9, rowWeights: [90, 80, 80] })
+
+    // Heavier top-of-range, gate passed (90 x 10 @ RPE 8): increases from 90 -> 92.5 kg
+    const rUp = rig(cfg)
+    rUp.train((s, k) => (k === 0 ? { w: 90, r: 10, rpe: 8 } : { r: 8 }))
+    expect(rUp.open().plan).toMatchObject({ kind: 'up', weight: 92.5, reps: 7, rowWeights: [92.5, 82.5, 82.5] })
+
+    // Heavier top-of-range, gate failed (90 x 10 @ RPE 10): holds at 90 kg
+    const rCap = rig(cfg)
+    rCap.train((s, k) => (k === 0 ? { w: 90, r: 10, rpe: 10 } : { r: 8 }))
+    expect(rCap.open().plan).toMatchObject({ kind: 'hold', weight: 90, reps: 10, rowWeights: [90, 80, 80] })
+  })
+
+  it('Item 4: running programmes keep RPT back-offs and live cascade across %1RM, RPE-only, deload weeks, owned gear, and pinned units', () => {
+    const cfg = { id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt' }
+    const r = rig(cfg)
+    // Seed a logged session (100 kg x 5 -> Epley e1RM ~116.7 kg; 75% ~ 87.5 kg)
+    r.train((s, k) => (k === 0 ? { w: 100, r: 5, rpe: 8 } : { w: 80, r: 8 }))
+
+    r.st = {
+      ...r.st,
+      programmes: {
+        p1: {
+          id: 'p1',
+          name: 'Block',
+          at: 1,
+          days: { 1: [r.routine.id] },
+          weeks: [
+            { t: { [BENCH]: { pct: 75, rpe: 8 } } },
+            { rpe: 8.5 },
+            { deload: true },
+          ],
+        },
+      },
+    }
+    startProgramme(r.st, 'p1', '2026-05-04', 1000)
+
+    // Week 1 (%1RM): programme sets Set 1 top weight (87.5 kg), RPT derives back-offs [87.5, 80, 80] + target.rpt
+    r.st.active = { id: 'pw1', d: '2026-05-04' }
+    const w1 = buildSessionEntries(r.st, r.routine)[0]
+    expect(w1.plan.kind).toBe('programme')
+    expect(w1.target.rpt).toEqual({ pct: 10, mode: 'flat' })
+    expect(w1.target.rowWeights).toEqual([87.5, 80, 80])
+    expect(work(w1.sets).map(s => s.w)).toEqual([87.5, 80, 80])
+
+    // Week 2 (RPE-only week, no %1RM): keeps RPT's weight & back-offs + target.rpt
+    r.st.active = { id: 'pw2', d: '2026-05-11' }
+    const w2 = buildSessionEntries(r.st, r.routine)[0]
+    expect(w2.plan.kind).toBe('programme')
+    expect(w2.target.rpt).toEqual({ pct: 10, mode: 'flat' })
+    expect(w2.target.rowWeights).toHaveLength(3)
+    expect(w2.target.rowWeights[0]).toBeGreaterThan(w2.target.rowWeights[1])
+    expect(work(w2.sets).map(s => s.w)).toEqual(w2.target.rowWeights)
+
+    // Week 3 (programme deload week): keeps back-off structure from deloaded top load AND marks noProg: true
+    r.st.active = { id: 'pw3', d: '2026-05-18' }
+    const w3 = buildSessionEntries(r.st, r.routine)[0]
+    expect(w3.noProg).toBe(true)
+    expect(w3.target.rpt).toEqual({ pct: 10, mode: 'flat' })
+    expect(w3.target.rowWeights[0]).toBeLessThan(100)
+    expect(w3.target.rowWeights[0]).toBeGreaterThan(w3.target.rowWeights[1])
+    expect(work(w3.sets).map(s => s.w)).toEqual(w3.target.rowWeights)
+
+    // Owned dumbbells + lb-pinned exercise in a programme keep nearest-bell RPT back-offs
+    const dbCfg = { id: DB_BENCH, sets: 3, reps: 10, repsMin: 7, weight: 20, prog: 'rpt' }
+    const dbRoutine = { id: 'r-dbp', name: 'DB', ex: [dbCfg] }
+    const dbSt = {
+      unit: 'kg',
+      exUnit: withExUnit({}, DB_BENCH, 'lb', 1),
+      dumbbells: withDumbbells({}, 'lb', [35, 40, 45, 50, 55, 60], 1),
+      routines: [dbRoutine],
+      workouts: [{
+        id: 'wdb0', d: '2026-04-20', routineId: 'r-dbp', routineIds: ['r-dbp'],
+        entries: [{ id: DB_BENCH, rid: 'r-dbp', sets: [{ w: 27.2155, r: 8, done: true }] }],
+      }],
+      programmes: {
+        pdb: { id: 'pdb', name: 'DB Block', at: 1, days: { 1: ['r-dbp'] }, weeks: [{ t: { [DB_BENCH]: { pct: 75 } } }] },
+      },
+      active: { id: 'pdb1', d: '2026-05-04' },
+    }
+    startProgramme(dbSt, 'pdb', '2026-05-04', 1000)
+    const dbEntry = buildSessionEntries(dbSt, dbRoutine)[0]
+    expect(dbEntry.target.rpt).toEqual({ pct: 10, mode: 'flat' })
+    expect(dbEntry.target.rowWeights[0]).toBeGreaterThan(dbEntry.target.rowWeights[1])
+  })
+
+  it('Preserved invariants: repeated RPE 10 holds indefinitely, lighter in-range resets streak, lighter below-range lowers anchor and counts miss', () => {
+    const cfg = { id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt' }
+
+    // 4 consecutive RPE 10 sessions hold indefinitely without deloading
+    const rGrind = rig(cfg)
+    for (let i = 0; i < 4; i++) {
+      rGrind.train((s, k) => (k === 0 ? { r: 10, rpe: 10 } : { r: 8 }))
+      const p = rGrind.open().plan
+      expect(p.kind).toBe('hold')
+      expect(p.weight).toBe(80)
+      expect(p.why[0]).toContain('RPE')
+    }
+
+    // Two misses at 80, then a lighter in-range session (75 x 8) resets streak to 0 and holds 75 aiming 9
+    const rLightIn = rig(cfg)
+    rLightIn.train((s, k) => (k === 0 ? { w: 80, r: 5 } : { r: 8 }))
+    rLightIn.train((s, k) => (k === 0 ? { w: 80, r: 5 } : { r: 8 }))
+    expect(stallCount(sessionsFor(rLightIn.st, BENCH, cfg, rLightIn.routine.id), 'rpt', cfg)).toBe(2)
+    rLightIn.train((s, k) => (k === 0 ? { w: 75, r: 8, rpe: 8 } : { w: 67.5, r: 8 }))
+    expect(stallCount(sessionsFor(rLightIn.st, BENCH, cfg, rLightIn.routine.id), 'rpt', cfg)).toBe(0)
+    expect(rLightIn.open().plan).toMatchObject({ kind: 'hold', weight: 75, reps: 9 })
+
+    // Lighter below-range (75 x 5) lowers anchor to 75 and counts as 1 miss
+    const rLightMiss = rig(cfg)
+    rLightMiss.train((s, k) => (k === 0 ? { w: 75, r: 5 } : { w: 67.5, r: 8 }))
+    expect(stallCount(sessionsFor(rLightMiss.st, BENCH, cfg, rLightMiss.routine.id), 'rpt', cfg)).toBe(1)
+    expect(rLightMiss.open().plan).toMatchObject({ kind: 'hold', weight: 75, reps: 7 })
   })
 })

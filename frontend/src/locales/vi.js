@@ -5888,4 +5888,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "Chừa ít nhất hai lần lặp dự trữ trước khi tăng tạ.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "Theo dõi độ gắng sức đang tắt, nên hiệp 1 chỉ tiến triển theo số lần lặp trừ khi bạn bật RPE hoặc RIR trong Cài đặt.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "Các hiệp mở đầu ở {0}. Hiệp 1 dẫn dắt tiến trình; các hiệp back-off đi theo.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "Hiệp đỉnh chưa được ghi nhận ở buổi trước. Giữ nguyên mức tạ ({0} trên {1} lượt còn lại).",
 };

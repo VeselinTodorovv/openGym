@@ -5922,4 +5922,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "Deja al menos dos repeticiones en recámara antes de subir peso.",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "El registro de esfuerzo está desactivado, así que la serie 1 progresa solo por repeticiones salvo que actives RPE o RIR en Ajustes.",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "Las series abren en {0}. La serie 1 marca la progresión; las de descarga la siguen.",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "La serie principal no se registró la última vez. Mismo peso otra vez ({0} de {1} restantes).",
 }

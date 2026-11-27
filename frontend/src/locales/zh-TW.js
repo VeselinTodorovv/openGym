@@ -5915,4 +5915,5 @@ export default {
   "Leave at least two reps in the tank before adding weight.": "加重量前至少保留兩下餘力。",
   "Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.": "努力度記錄已關閉，除非在設定中開啟 RPE 或 RIR，否則第 1 組僅依賴次數進階。",
   "Sets open at {0}. Set 1 drives progression; back-off sets follow it.": "各組起始為 {0}。第 1 組主導進階，退負荷組隨之調整。",
+  "Top set was not logged last time. Same weight again ({0} of {1} to go).": "上次未記錄頂組。維持相同重量（還剩 {0}/{1} 次機會）。",
 }
