@@ -5,8 +5,9 @@
 // either imports this file, so there is no cycle.
 import { buildSets, applyIntensifierPlan, modeOf, barFloor, isBw, isPerSide, repStep, lastEntryFor, insertWarmupRow, bandClimbReps } from './history.js'
 import { isWarmupRow, isSideSet, syncSideAggregate } from './workout-model.js'
-import { nextPrescription, applyPrescription, defaultIncrement, weightIncrement, plannedOf, deloadTo, DELOAD_FACTOR, sessionsFor, rptRampOf } from './progression.js'
+import { nextPrescription, applyPrescription, defaultIncrement, weightIncrement, plannedOf, deloadTo, DELOAD_FACTOR, sessionsFor, rptTargetRirs } from './progression.js'
 import { normalizeRepRange } from './rep-range.js'
+import { isPyramid } from './pyramid.js'
 import { dropGrid } from './plates.js'
 import { backoffStepOf, applyBackoff } from './backoff.js'
 import { dbLoadFor, historyAs, ownedWeightsFor, withMeaning } from './dumbbells.js'
@@ -183,7 +184,11 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
   else delete target.rowWeights
   if (plan.policy === 'rpt' && !(isBw(cfg) && !(cfg.weight > 0) && !(plan.weight > 0))) {
     const range = normalizeRepRange(cfg.reps || 10, cfg.repsMin, repStep(cfg))
-    target.rpt = { ramp: rptRampOf(cfg), repsMin: range.repsMin, reps: range.reps }
+    target.rpt = {
+      rirs: rptTargetRirs(Math.max(1, Math.round(rowCfg.sets) || 1), cfg),
+      repsMin: range.repsMin,
+      reps: range.reps,
+    }
   } else delete target.rpt
   // The step the back-off sets were built with, kept on the session so reading it back
   // (progression.js readSession) holds each set to its own weight even after the plan changes.
@@ -327,4 +332,16 @@ export function buildSessionEntries(st, r) {
   // in place of the prescription's; the routine and its targets stay what they built.
   return withSessionTarget(st, r, entries, st?.active?.d || todayISO(), TARGET_HELPERS)
 }
+/**
+ * The routine slot with its live projected working weight filled in from history, confirmed
+ * `exWeights`, or a running programme, while preserving the routine's planned sets and rep range.
+ */
+export function projectedRoutineSlot(st, cfg, routine) {
+  if (!cfg || !routine || routine.excludeFromProgression === true) return cfg
+  if (modeOf(cfg) !== 'reps' || isPyramid(cfg) || (isBw(cfg) && !(Number(cfg.weight) > 0))) return cfg
+  const built = buildPlannedEntry(st, cfg, routine)
+  const w = built?.target?.weight
+  return w != null && (w > 0 || (w === 0 && isAssisted(cfg) && Number(cfg.weight) > 0)) ? { ...cfg, weight: w } : cfg
+}
+
 const TARGET_HELPERS = { modeOf, isPerSide }

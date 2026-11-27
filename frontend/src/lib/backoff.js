@@ -136,26 +136,64 @@ export function snapBackoff(raw, prev, grid = 2.5, floor = 0) {
 
 export const RPT_RAMPS = ['8-9-10', '9-9-10', '9-9-9']
 export const RPT_DEFAULT_RAMP = '8-9-10'
+export const RPT_RIR_MIN = 0
+export const RPT_RIR_MAX = 4
+
+export const clampRptRir = v => {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 1
+  return Math.max(RPT_RIR_MIN, Math.min(RPT_RIR_MAX, Math.round(n * 2) / 2))
+}
+
+export function defaultRptRirs(count) {
+  const n = Math.max(0, Math.round(Number(count)) || 0)
+  if (n === 0) return []
+  if (n === 1) return [1]
+  if (n === 2) return [1, 0]
+  return [2, ...Array(n - 2).fill(1), 0]
+}
 
 export function rptRampOf(cfg) {
   return RPT_RAMPS.includes(cfg?.rptRamp) ? cfg.rptRamp : RPT_DEFAULT_RAMP
 }
 
 /**
- * Planned effort per work set in internal RIR (RPE 8 = 2, RPE 9 = 1, RPE 10 = 0), scaled to `count` sets:
- *   - '8-9-10': [2, 1, ..., 1, 0]  (2 sets -> [2, 0]; 1 set -> [2])
- *   - '9-9-10': [1, 1, ..., 1, 0]  (1 set -> [1])
- *   - '9-9-9':  [1, 1, ..., 1]
+ * Planned effort per work set in internal RIR (RPE 8 = 2, RPE 9 = 1, RPE 10 = 0), scaled to `count` sets.
+ * Accepts a config/spec carrying custom `rptRir` (or `rirs`), a legacy `rptRamp` string, or defaults:
+ *   - 1 set:  [1]           (RPE 9)
+ *   - 2 sets: [1, 0]        (RPE 9 -> 10)
+ *   - 3 sets: [2, 1, 0]     (RPE 8 -> 9 -> 10)
+ *   - 4+ sets:[2, 1, .., 0] (RPE 8 -> 9 -> .. -> 10)
  */
-export function rptTargetRirs(count, ramp = RPT_DEFAULT_RAMP) {
+export function rptTargetRirs(count, cfgOrRamp = RPT_DEFAULT_RAMP) {
   const n = Math.max(0, Math.round(Number(count)) || 0)
   if (n === 0) return []
-  const mode = RPT_RAMPS.includes(ramp) ? ramp : RPT_DEFAULT_RAMP
-  if (mode === '9-9-9') return Array(n).fill(1)
-  if (mode === '9-9-10') return n === 1 ? [1] : [...Array(n - 1).fill(1), 0]
-  if (n === 1) return [2]
-  if (n === 2) return [2, 0]
-  return [2, ...Array(n - 2).fill(1), 0]
+  if (Array.isArray(cfgOrRamp) && cfgOrRamp.length) {
+    const clean = cfgOrRamp.map(clampRptRir)
+    if (clean.length >= n) return clean.slice(0, n)
+    return [...clean, ...Array(n - clean.length).fill(clean[clean.length - 1])]
+  }
+  if (cfgOrRamp && typeof cfgOrRamp === 'object') {
+    const arr = Array.isArray(cfgOrRamp.rptRir) ? cfgOrRamp.rptRir : Array.isArray(cfgOrRamp.rirs) ? cfgOrRamp.rirs : null
+    if (arr && arr.length) {
+      const clean = arr.map(clampRptRir)
+      if (clean.length >= n) return clean.slice(0, n)
+      return [...clean, ...Array(n - clean.length).fill(clean[clean.length - 1])]
+    }
+    if (typeof cfgOrRamp.rptRamp === 'string') return rptTargetRirs(n, cfgOrRamp.rptRamp)
+    if (typeof cfgOrRamp.ramp === 'string') return rptTargetRirs(n, cfgOrRamp.ramp)
+    return defaultRptRirs(n)
+  }
+  if (cfgOrRamp === '9-9-9') return Array(n).fill(1)
+  if (cfgOrRamp === '9-9-10') return n === 1 ? [1] : [...Array(n - 1).fill(1), 0]
+  return defaultRptRirs(n)
+}
+
+export function isDefaultRptRirs(rirs, count) {
+  const n = Math.max(1, Math.round(Number(count)) || (Array.isArray(rirs) ? rirs.length : 1))
+  const a = rptTargetRirs(n, rirs)
+  const d = defaultRptRirs(n)
+  return a.length === d.length && a.every((v, i) => Math.abs(v - d[i]) < 1e-6)
 }
 
 const setRirOf = s =>
@@ -209,7 +247,7 @@ export function applyReactiveRpt(rows, fromIdx, spec, side) {
   }
   const pos = workIndices.indexOf(fromIdx)
   if (pos < 0 || pos >= workIndices.length - 1) return rows
-  const rirs = rptTargetRirs(workIndices.length, spec.ramp)
+  const rirs = rptTargetRirs(workIndices.length, spec)
   const currentRir = rirs[pos]
   const nextRir = rirs[pos + 1]
   const next = rows.slice()

@@ -501,7 +501,7 @@ const CHANGE_APPLY = {
     if (Number.isInteger(a.repsMin)) e.repsMin = a.repsMin
     if (Number.isInteger(a.repsMax)) e.repsMax = a.repsMax
     if (Number.isInteger(a.setsMax)) e.setsMax = a.setsMax   // triple progression's set ceiling
-    if (['8-9-10', '9-9-10', '9-9-9'].includes(a.rptRamp)) e.rptRamp = a.rptRamp
+    if (Array.isArray(a.rptRir) && a.rptRir.length) e.rptRir = a.rptRir.slice(0, 10).map(v => Math.max(0, Math.min(4, Math.round(Number(v) * 2) / 2)))
     if ([0, 1, 2].includes(a.topMinRir)) e.topMinRir = a.topMinRir
     // Only when the Coach disagreed with the catalogue: an absent flag has always meant
     // "whatever the exercise says", and writing one out would freeze today's dataset into
@@ -588,7 +588,7 @@ const CHANGE_APPLY = {
         ...(Number.isInteger(e.repsMax) ? { repsMax: e.repsMax } : {}),
         ...(Number.isInteger(e.setsMax) ? { setsMax: e.setsMax } : {}),
         ...(POLICIES.includes(e.prog) ? { prog: e.prog } : {}),
-        ...(['8-9-10', '9-9-10', '9-9-9'].includes(e.rptRamp) ? { rptRamp: e.rptRamp } : {}),
+        ...(Array.isArray(e.rptRir) && e.rptRir.length ? { rptRir: e.rptRir.slice(0, 10).map(v => Math.max(0, Math.min(4, Math.round(Number(v) * 2) / 2))) } : {}),
         ...([0, 1, 2].includes(e.topMinRir) ? { topMinRir: e.topMinRir } : {}),
         ...(e.bodyweight != null ? { bodyweight: !!e.bodyweight } : {}),
         ...(e.side ? { side: true } : {})

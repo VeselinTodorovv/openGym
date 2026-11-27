@@ -121,8 +121,8 @@ test('readSession agrees with the frontend on per-set aims under triple progress
 
 test('readSession and cleanPlan agree with the frontend on Top set & back-offs (`rpt`)', () => {
   const BENCH_ID = '0025';
-  const rptPlan = { id: BENCH_ID, sets: 3, reps: 10, repsMin: 7, mode: 'reps', weight: 80, prog: 'rpt', rptRamp: '9-9-10', topMinRir: 0 };
-  const rptTarget = { sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt', rpt: { ramp: '9-9-10', repsMin: 7, reps: 10 } };
+  const rptPlan = { id: BENCH_ID, sets: 3, reps: 10, repsMin: 7, mode: 'reps', weight: 80, prog: 'rpt', rptRir: [2, 1, 1], topMinRir: 0 };
+  const rptTarget = { sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt', rpt: { rirs: [2, 1, 1], repsMin: 7, reps: 10 } };
   const rptEntry = sets => ({ id: BENCH_ID, target: rptTarget, sets });
   const buildRpt = entries => payload.build(sampleState({
     routines: [{ id: 'r-rpt', name: 'Push', ex: [rptPlan] }],
@@ -144,8 +144,8 @@ test('readSession and cleanPlan agree with the frontend on Top set & back-offs (
   assert.equal(benchAgg(pHit).lastOk, true);
   assert.equal(benchAgg(pHit).stalls, 0);
   assert.deepEqual(
-    [pHit.plan.routines[0].ex[0].prog, pHit.plan.routines[0].ex[0].rptRamp, pHit.plan.routines[0].ex[0].topMinRir],
-    ['rpt', '9-9-10', 0]
+    [pHit.plan.routines[0].ex[0].prog, pHit.plan.routines[0].ex[0].rptRir, pHit.plan.routines[0].ex[0].topMinRir],
+    ['rpt', [2, 1, 1], 0]
   );
 
   // Set 1 misses repsMin (6 < 7) even if back-offs get 12 -> miss on both sides, 1 stall.

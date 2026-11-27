@@ -23,7 +23,7 @@ import { normalizeRepRange } from './rep-range.js'
 import { nextRung } from './ladders.js'
 import { gymSplitView } from './gym-split.js'
 import { isPyramid } from './pyramid.js'
-import { backoffAt, RPT_RAMPS, RPT_DEFAULT_RAMP, rptRampOf, rptTargetRirs } from './backoff.js'
+import { backoffAt, RPT_RAMPS, RPT_DEFAULT_RAMP, RPT_RIR_MIN, RPT_RIR_MAX, clampRptRir, defaultRptRirs, isDefaultRptRirs, rptRampOf, rptTargetRirs } from './backoff.js'
 import { ownedWeightsFor, ownedKindFor, ownedUp, ownedDeload, ownedAround } from './dumbbells.js'
 import { rirOf } from './effort.js'
 
@@ -67,7 +67,7 @@ export const POLICY_DESC = {
 // default out of saved configs so plans written before this policy stays byte-for-byte compatible.
 export const DELOAD_FACTOR = 0.9
 export const DELOAD_AFTER = { linear: 3, greyskull: 1, double: 3, steady: 3, triple: 3, rpt: 3, density: 3, time: 3 }
-export { RPT_RAMPS, RPT_DEFAULT_RAMP, rptRampOf, rptTargetRirs }
+export { RPT_RAMPS, RPT_DEFAULT_RAMP, RPT_RIR_MIN, RPT_RIR_MAX, clampRptRir, defaultRptRirs, isDefaultRptRirs, rptRampOf, rptTargetRirs }
 export const RPT_MIN_RIRS = [0, 1, 2]
 export const RPT_DEFAULT_MIN_RIR = 1
 

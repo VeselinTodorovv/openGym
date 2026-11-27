@@ -108,15 +108,15 @@ test('the Gemini request carries responseSchema only when the schema fits its su
 
 test('CREATE_SCHEMA exposes RPT exercise fields in both strictSchema and geminiSchema', () => {
   const exProps = CREATE_SCHEMA.properties.routines.items.properties.ex.items.properties;
-  assert.deepEqual(exProps.rptRamp, { type: 'string' });
+  assert.equal(exProps.rptRir.type, 'array');
   assert.deepEqual(exProps.topMinRir, { type: 'integer' });
 
   const strictEx = strictSchema(CREATE_SCHEMA).properties.routines.items.properties.ex.items;
   assert.equal(strictEx.additionalProperties, false);
-  assert.ok('rptRamp' in strictEx.properties && 'topMinRir' in strictEx.properties);
+  assert.ok('rptRir' in strictEx.properties && 'topMinRir' in strictEx.properties);
 
-  const geminiEx = geminiSchema(CREATE_SCHEMA).routines?.items?.properties?.ex?.items?.properties
-    || geminiSchema(CREATE_SCHEMA).properties.routines.items.properties.ex.items.properties;
-  assert.equal(geminiEx.rptRamp.type, 'string');
+  const geminiEx = geminiSchema(CREATE_SCHEMA).properties.routines.items.properties.ex.items.properties;
+  assert.equal(geminiEx.rptRir.type, 'array');
+  assert.ok(!('maxItems' in geminiEx.rptRir));
   assert.equal(geminiEx.topMinRir.type, 'integer');
 });

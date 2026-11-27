@@ -50,7 +50,7 @@ import LiveCard from '../components/LiveCard.jsx'
 import Icon from '../components/Icon.jsx'
 import { Button, Check, NumberField } from '../components/ui.jsx'
 import { defaultIncrement, weightIncrement, stepWeight } from '../lib/progression.js'
-import { rptRampOf, rptTargetRirs, applyReactiveRpt } from '../lib/backoff.js'
+import { rptTargetRirs, applyReactiveRpt } from '../lib/backoff.js'
 import { normalizeRepRange } from '../lib/rep-range.js'
 import { progressionGuidance } from '../lib/progression-copy.js'
 import { rpeAs } from '../lib/programmes.js'
@@ -70,7 +70,7 @@ import { bindWatchActions, markDiscarded, watchTickRest, applyRestStep, restAtFo
 import { bestSetFor } from '../lib/exercise-history.js'
 import { bindLiveActions } from '../lib/live-activity.js'
 import { bindWidgetActions } from '../lib/widget-logger.js'
-import { isWarmupRow, isFailureSet, toggleFailure, isDropSet, isRestPauseSet, isClusterSet, dropsOf, clustersOf, addDrop, addCluster, removeDropAt, removeClusterAt, setDropAt, setClusterAt, nextDropWeight, nextBurstReps, isSideSet, makeSideSet, setSideField, toggleSide, addSideDrop, removeSideDropAt, setSideDropAt, addSideCluster, removeSideClusterAt, setSideClusterAt, WEIGHT_ORIGIN_MANUAL, markWarmupEdited } from '../lib/workout-model.js'
+import { isWarmupRow, isFailureSet, toggleFailure, isDropSet, isRestPauseSet, isClusterSet, dropsOf, clustersOf, addDrop, addCluster, removeDropAt, removeClusterAt, setDropAt, setClusterAt, nextDropWeight, nextBurstReps, isSideSet, makeSideSet, setSideField, syncSideAggregate, toggleSide, addSideDrop, removeSideDropAt, setSideDropAt, addSideCluster, removeSideClusterAt, setSideClusterAt, WEIGHT_ORIGIN_MANUAL, markWarmupEdited } from '../lib/workout-model.js'
 import { canMoveActiveWorkoutUnit, moveActiveWorkoutUnit, canMoveActiveWorkoutEntry, moveActiveWorkoutEntry } from '../lib/active-workout-order.js'
 import { nextOpenSet, workoutKeyAction } from '../lib/workout-keys.js'
 import { MUSCLE_NAME } from '../lib/muscles.js'
@@ -166,11 +166,52 @@ function rptSpecFor(s, e) {
     repStep(cfg)
   )
   return {
-    ramp: rptRampOf({ rptRamp: e.target.rpt.ramp ?? cfg.rptRamp }),
+    rirs: Array.isArray(e.target.rpt.rirs) ? e.target.rpt.rirs : undefined,
+    rptRir: Array.isArray(cfg.rptRir) ? cfg.rptRir : undefined,
+    ramp: e.target.rpt.ramp ?? cfg.rptRamp,
     repsMin: range.repsMin,
     reps: range.reps,
     grid: backoffGrid(V, cfg),
     floor: barFloor(V, e.id),
+  }
+}
+
+function reapplyReactiveRpt(s, e, { resetIfNoneDone = false } = {}) {
+  const spec = rptSpecFor(s, e)
+  if (!spec || !Array.isArray(e?.sets)) return
+  const work = []
+  e.sets.forEach((row, i) => { if (!isWarmupRow(row)) work.push(i) })
+  if (work.length < 2) return
+  const firstRow = e.sets[work[0]]
+  if (isSideSet(firstRow)) {
+    for (const side of ['L', 'R']) {
+      const lastDone = [...work].reverse().find(i => e.sets[i]?.sides?.[side]?.done)
+      if (lastDone != null) e.sets = applyReactiveRpt(e.sets, lastDone, spec, side)
+      else if (resetIfNoneDone) {
+        const topW = Number(firstRow.sides?.[side]?.w) || 0
+        if (topW > 0) {
+          e.sets = e.sets.map((row, idx) => {
+            if (!work.slice(1).includes(idx) || !isSideSet(row)) return row
+            const cur = row.sides?.[side]
+            if (!cur || cur.done || cur.weightOrigin === 'manual') return row
+            return syncSideAggregate({ ...row, sides: { ...row.sides, [side]: { ...cur, w: topW } } })
+          })
+        }
+      }
+    }
+    return
+  }
+  const lastDone = [...work].reverse().find(i => e.sets[i]?.done)
+  if (lastDone != null) e.sets = applyReactiveRpt(e.sets, lastDone, spec)
+  else if (resetIfNoneDone) {
+    const topW = Number(firstRow?.w) || 0
+    if (topW > 0) {
+      e.sets = e.sets.map((row, idx) => (
+        work.slice(1).includes(idx) && !isSideSet(row) && !row.done && row.weightOrigin !== 'manual'
+          ? { ...row, w: topW }
+          : row
+      ))
+    }
   }
 }
 
@@ -248,6 +289,7 @@ function ExerciseBlock({ entryIdx, compact, listed, dense, editing, onToggle, on
   const setPhaseAt = (i, warm) => update(s => {
     const e = s.active.entries[entryIdx]
     e.sets = warm ? makeWarmupAt(e.sets, i) : makeWorkAt(e.sets, i)
+    if (!editing) inEntryUnit(s, entryIdx, en => reapplyReactiveRpt(s, en, { resetIfNoneDone: true }))
   }, true)
   const toggleFailureAt = i => update(s => {
     const e = s.active.entries[entryIdx]
@@ -820,7 +862,7 @@ function ExerciseBlock({ entryIdx, compact, listed, dense, editing, onToggle, on
     entry.sets.forEach((x, idx) => { if (!isWarmupRow(x)) workIndices.push(idx) })
     const pos = workIndices.indexOf(i)
     if (pos < 0) return null
-    const targetRir = rptTargetRirs(workIndices.length, entry.target.rpt.ramp)[pos]
+    const targetRir = rptTargetRirs(workIndices.length, entry.target.rpt)[pos]
     if (targetRir == null) return null
     const val = effKind === 'rpe' ? 10 - targetRir : targetRir
     return `~${fmtNum(val)}`
@@ -1221,7 +1263,10 @@ export function deleteActiveSet(idx, i, { editing = false } = {}) {
     const en = s.active?.entries?.[idx]
     if (!en) return
     if (editing) en.sets.splice(start, count)
-    else en.sets = removeRowAt(en.sets, i)
+    else {
+      en.sets = removeRowAt(en.sets, i)
+      inEntryUnit(s, idx, entryInUnit => reapplyReactiveRpt(s, entryInUnit, { resetIfNoneDone: true }))
+    }
   }, true)
   const msg = warm ? t('Warm-up gone.') : stopped ? t('Set {0} gone. Its timer stopped too.', n) : t('Set {0} gone.', n)
   ui.toast(msg, { action: t('Undo'), onAction: () => undoDeleteSet(token) })
@@ -1663,7 +1708,7 @@ function ActiveWorkout() {
     e.sets[i] = markWarmupEdited(e.sets[i], field)
   })
   const modeAt = idx => modeOf({ ...(A.entries[idx].target || {}), id: A.entries[idx].id })
-  const addSet = idx => mutEntry(idx, e => {
+  const addSet = idx => mutEntry(idx, (e, curS) => {
     const l = e.sets[e.sets.length - 1]
     const m = modeOf({ ...(e.target || {}), id: e.id })
     if (m === 'cardio') e.sets.push({ min: l ? l.min : (e.target.min || 20), speed: l ? l.speed : (e.target.speed || 8), ...(Number(l?.km) > 0 ? { km: l.km } : {}), ...inclineFrom(l || e.target), ...levelFrom(l || e.target), done: false })
@@ -1685,9 +1730,13 @@ function ActiveWorkout() {
           ? makeSideSet({ w: l.sides.L.w, r: (l.sides.L.r || 0) * 2 })
           : makeSideSet(row))
         : row)
+      if (!editing) reapplyReactiveRpt(curS, e)
     }
   })
-  const removeSet = idx => mutEntry(idx, e => { e.sets = removeLastSet(e.sets) })
+  const removeSet = idx => mutEntry(idx, (e, curS) => {
+    e.sets = removeLastSet(e.sets)
+    if (!editing) reapplyReactiveRpt(curS, e, { resetIfNoneDone: true })
+  })
   const addWarmup = idx => mutEntry(idx, e => {
     const m = modeOf({ ...(e.target || {}), id: e.id })
     const V = exView(S, e.id)
@@ -2129,6 +2178,7 @@ function ActiveWorkout() {
         if (built.carried) activeEntry.carried = true
         else delete activeEntry.carried
         activeEntry.sets = [...doneWarm, ...freshWarm.slice(doneWarm.length), ...doneWork, ...freshWork.slice(doneWork.length)]
+        if (!editing && doneWork.length > 0) inEntryUnit(s, idx, en => reapplyReactiveRpt(s, en))
       })
     }, null, routine, null, null, undefined, { freestyle: routine ? false : 'edit' })
   }
@@ -2303,6 +2353,9 @@ function ActiveWorkout() {
           const spec = rptSpecFor(s, en)
           if (spec) en.sets = applyReactiveRpt(en.sets, i, spec, side)
         })
+        e = s.active.entries[idx]
+      } else if (!editing) {
+        inEntryUnit(s, idx, en => reapplyReactiveRpt(s, en, { resetIfNoneDone: true }))
         e = s.active.entries[idx]
       }
       // A finished row has no use for a plan set aside by a hold that did not finish.

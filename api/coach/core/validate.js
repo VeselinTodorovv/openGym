@@ -46,12 +46,18 @@ const MAX_PROGRAMME_WEEKS = 16;
 const MAX_WEEK_TARGETS = 24;
 const halfStep = v => Math.round(v * 2) / 2;
 const POLICIES = ['off', 'linear', 'greyskull', 'double', 'steady', 'triple', 'rpt', 'undulating', 'density', 'ladder', 'time'];
-const RPT_RAMPS = ['8-9-10', '9-9-10', '9-9-9'];
 const RPT_MIN_RIRS = [0, 1, 2];
-const rptFields = e => (e.mode === 'cardio' || e.mode === 'time' ? {} : {
-  ...(RPT_RAMPS.includes(e.rptRamp) ? { rptRamp: e.rptRamp } : {}),
-  ...(RPT_MIN_RIRS.includes(e.topMinRir) ? { topMinRir: e.topMinRir } : {})
-});
+const cleanRptRir = arr => (Array.isArray(arr) && arr.length
+  ? arr.slice(0, 10).filter(v => isNum(v) && v >= 0 && v <= 4).map(halfStep)
+  : []);
+const rptFields = e => {
+  if (e.mode === 'cardio' || e.mode === 'time') return {};
+  const rptRir = cleanRptRir(e.rptRir);
+  return {
+    ...(rptRir.length ? { rptRir } : {}),
+    ...(RPT_MIN_RIRS.includes(e.topMinRir) ? { topMinRir: e.topMinRir } : {})
+  };
+};
 const MODES = ['reps', 'time', 'cardio'];
 const MAX_INC = 50;
 // A prescription, not a world record. Anything past this is a model slip or a hostile answer,

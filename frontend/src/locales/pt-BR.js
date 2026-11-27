@@ -4344,21 +4344,12 @@ export const PT_BR_OVERRIDES = {
   "2+ RIR in reserve": "2+ RIR na reserva",
   "Leave at least two reps in the tank before adding weight.": "Deixe pelo menos duas repetições na reserva antes de subir o peso.",
   "Top set was not logged last time. Same weight again ({0} of {1} to go).": "A série principal não foi registrada na última vez. Mesmo peso de novo ({0} de {1} restantes).",
-}
-
-export default { ...pt, ...PT_BR_OVERRIDES,
   'Push set 1 through a rep range, then adjust later sets from your reps and effort to stay in range. Hit the top of the range cleanly and the weight goes up.': 'Evolua a série 1 dentro de uma faixa de repetições e ajuste as séries seguintes pelas suas repetições e esforço para ficar na faixa. Bata o topo com boa execução e a carga sobe.',
   'Top set hit {0} reps ({1} sessions at {2} {3}). Aim for {4} reps, or micro-load if progress feels flat.': 'A série 1 bateu {0} repetições ({1} treinos com {2} {3}). Mire em {4} repetições ou faça uma microprogressão se o avanço parecer travado.',
-  'Set effort': 'Esforço das séries',
-  'RPE 8 → 9 → 10': 'RPE 8 → 9 → 10',
-  '2 → 1 → 0 RIR': '2 → 1 → 0 RIR',
-  'Build effort each set and take the last set to failure.': 'Aumente o esforço a cada série e leve a última até a falha.',
-  'RPE 9 → 9 → 10': 'RPE 9 → 9 → 10',
-  '1 → 1 → 0 RIR': '1 → 1 → 0 RIR',
-  'Keep one rep in reserve, then take the last set to failure.': 'Deixe uma repetição na reserva e leve a última série até a falha.',
-  'RPE 9 across sets': 'RPE 9 em todas as séries',
-  '1 RIR across sets': '1 RIR em todas as séries',
-  'Keep one rep in reserve on every set.': 'Deixe uma repetição na reserva em cada série.',
   'Turn RPE or RIR on in Settings so sets adjust from your effort as well as your reps.': 'Ative RPE ou RIR nas Configurações para que as séries se ajustem pelo seu esforço e pelas repetições.',
   'Sets open at {0} and adjust live from your reps and effort. Set 1 drives progression.': 'As séries começam em {0} e se ajustam na hora pelas suas repetições e esforço. A série 1 guia a progressão.',
+  'Target RPE per set': 'RPE alvo por série',
+  'Target RIR per set': 'RIR alvo por série',
 }
+
+export default { ...pt, ...PT_BR_OVERRIDES }

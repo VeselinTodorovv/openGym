@@ -27,6 +27,7 @@ import { MOBILE, nativePlatform } from './mobile.js'
 import { EXIDX } from './exercises.js'
 import { t, tn, dateLocale } from './i18n.js'
 import { effectiveRoutines, exLine, bestWeightForEntry, sessionVolume, lastBW } from './history.js'
+import { projectedRoutineSlot } from './session-start.js'
 import { streakInfo } from './streak.js'
 import { levelOf } from './levels.js'
 import { challengesOn, monthChallenges, progressOf } from './challenges.js'
@@ -73,7 +74,7 @@ function dayOf (S, iso, today) {
   }
   if (iso === today) {
     const speed = speedUnitOf(S)
-    day.exercises = routines.flatMap(r => r.ex || []).slice(0, WIDGET_EXERCISES_MAX).map(cfg => {
+    day.exercises = routines.flatMap(r => (r.ex || []).map(cfg => projectedRoutineSlot(S, cfg, r))).slice(0, WIDGET_EXERCISES_MAX).map(cfg => {
       let line = ''
       // In the exercise's own weight unit when it has one (#657).
       try { line = stripBidi(exLine(viewTarget(S, cfg.id, cfg), exUnitOf(S, cfg.id), speed)) } catch { line = '' }

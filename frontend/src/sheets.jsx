@@ -83,7 +83,7 @@ import { exerciseHistory } from './lib/exercise-history.js'
 import { relativeSeries } from './lib/relative-strength.js'
 import { isBellEx, dbLoadOf, dbLoadFor, withDbLoad, entryDbLoad, currentDbLoad, isOneArm, dumbbellsOf, ownsDumbbells, withDumbbells, ownsNoDumbbells, withNoDumbbells, presetWeights, cleanWeights, canHaveStack, stackOf, withStack, stackFromStep, parseWeightList } from './lib/dumbbells.js'
 import { nextStep } from './lib/weight-step.js'
-import { policyFor, profileRule, defaultIncrement, POLICIES_FOR, POLICY_NAME, POLICY_DESC, MAX_BW_SETS, MAX_TRIPLE_SETS, DENSITY_FLOOR, dupReps, RPT_DEFAULT_RAMP, RPT_DEFAULT_MIN_RIR, rptRampOf, rptTopMinRirOf } from './lib/progression.js'
+import { policyFor, profileRule, defaultIncrement, POLICIES_FOR, POLICY_NAME, POLICY_DESC, MAX_BW_SETS, MAX_TRIPLE_SETS, DENSITY_FLOOR, dupReps, RPT_DEFAULT_MIN_RIR, clampRptRir, isDefaultRptRirs, rptTargetRirs, rptTopMinRirOf } from './lib/progression.js'
 import { normalizeRepRange } from './lib/rep-range.js'
 import { isBackoff, backoffWeights } from './lib/backoff.js'
 import { isPyramid, normalizePyramid, normalizePyramidRest, normalizePyramidWeight, pyramidFromFlat, flatFromPyramid, pyramidLabel, PYRAMID_MAX, MAX_PYRAMID_SETS, PYRAMID_PRESETS } from './lib/pyramid.js'
@@ -110,7 +110,7 @@ import { warmupModeOf, ownRowsOf } from './lib/warmup-ramp.js'
 import { useSheetKeyboard, useRevealActiveChip, tappable } from './lib/use-sheet-keyboard.js'
 import { useAutoMore } from './lib/use-auto-more.js'
 import { isFav, toggleFav, sortFavouritesFirst, sortYoursFirst } from './lib/favourites.js'
-import { buildSessionEntries, buildPlannedEntry, buildSessionEntry, plannedConfigOf } from './lib/session-start.js'
+import { buildSessionEntries, buildPlannedEntry, buildSessionEntry, plannedConfigOf, projectedRoutineSlot } from './lib/session-start.js'
 import { finishCompare, finishCardio } from './lib/finish-compare.js'
 import { workoutFit, fitFileName } from './lib/fit-export.js'
 import { joinSessionNoProg } from './lib/session-noprog.js'
@@ -2426,7 +2426,25 @@ function ProgressionFields({ st, ex, mode, c, setC, routine, unit, perSide, bw, 
   const preview = backoff && c.weight > 0 && inc > 0
     ? backoffWeights(c.weight, Math.max(1, Math.round(c.sets) || 1), inc).map(fmtNum).join(' → ') + ' ' + unit
     : ''
-  const rptRamp = rptRampOf(c)
+  const rptSetCount = Math.min(PLAN_MAX_SETS, Math.max(1, Math.round(c.sets) || 1))
+  const rptRirs = active === 'rpt' && mode === 'reps' ? rptTargetRirs(rptSetCount, c) : []
+  const rptRows = []
+  const rptPerRow = rptSetCount === 4 ? 4 : 3
+  for (let start = 0; start < rptRirs.length; start += rptPerRow) {
+    rptRows.push(rptRirs.slice(start, start + rptPerRow).map((rir, k) => ({ i: start + k, rir })))
+  }
+  const setRptSetEffort = (idx, shownVal) => setC(x => {
+    const n = Math.min(PLAN_MAX_SETS, Math.max(1, Math.round(x.sets) || 1))
+    const cur = rptTargetRirs(n, x)
+    const rirVal = clampRptRir(effScale === 'rpe' ? 10 - Number(shownVal) : Number(shownVal))
+    const nextRirs = cur.slice()
+    nextRirs[idx] = rirVal
+    const full = Array.isArray(x.rptRir) && x.rptRir.length > n
+      ? [...nextRirs, ...x.rptRir.slice(n).map(clampRptRir)]
+      : nextRirs
+    const { rptRamp: _legacy, ...rest } = x
+    return { ...rest, rptRir: full }
+  })
   const rptMinRir = rptTopMinRirOf(c)
   const effScale = displayScale(st)
   const effOff = effortOf(st) === 'none'
@@ -2492,14 +2510,22 @@ function ProgressionFields({ st, ex, mode, c, setC, routine, unit, perSide, bw, 
         onChange={v => setC(x => ({ ...x, restMin: v }))} />}
     </div>}
     {active === 'rpt' && mode === 'reps' && !weightless && <>
+      {!assisted && <>
+        <div className="small muted" style={{ marginBottom: 6, fontWeight: 500 }}>
+          {effScale === 'rpe' ? t('Target RPE per set') : t('Target RIR per set')}
+        </div>
+        {rptRows.map((grp, gi) => (
+          <div key={gi} className={'row cfgrow' + (grp.length === 4 ? ' cfgrow-4' : '')} style={{ marginBottom: gi === rptRows.length - 1 ? 12 : 8 }}>
+            {grp.map(({ i, rir }) => (
+              <Stepper key={i} label={t('Set {0}', i + 1)}
+                value={effScale === 'rpe' ? Math.round((10 - rir) * 10) / 10 : rir}
+                step={0.5} min={effScale === 'rpe' ? 6 : 0} max={effScale === 'rpe' ? 10 : 4} decimal
+                onChange={v => setRptSetEffort(i, v)} />
+            ))}
+          </div>
+        ))}
+      </>}
       <div className="sect-b" style={{ marginBottom: effOff || rptPreview ? 8 : 18 }}>
-        {!assisted && <SelectRow title={t('Set effort')} sheetTitle={t('Set effort')} value={rptRamp}
-          onChange={v => setC(x => ({ ...x, rptRamp: v }))}
-          options={[
-            { value: '8-9-10', label: effScale === 'rpe' ? t('RPE 8 → 9 → 10') : t('2 → 1 → 0 RIR'), subtitle: t('Build effort each set and take the last set to failure.') },
-            { value: '9-9-10', label: effScale === 'rpe' ? t('RPE 9 → 9 → 10') : t('1 → 1 → 0 RIR'), subtitle: t('Keep one rep in reserve, then take the last set to failure.') },
-            { value: '9-9-9', label: effScale === 'rpe' ? t('RPE 9 across sets') : t('1 RIR across sets'), subtitle: t('Keep one rep in reserve on every set.') },
-          ]} />}
         <SelectRow title={t('Effort gate')} sheetTitle={t('Effort gate')} value={String(rptMinRir)}
           onChange={v => setC(x => ({ ...x, topMinRir: Number(v) }))}
           options={[
@@ -2643,7 +2669,10 @@ function ExConfig({ ex, existing, onSave, onDelete, onReplace, close, routine, i
   // or timed like any other (#678). A saved duration/speed plan keeps its cardio form even after
   // the catalogue moved its exercise out of cardio (jumping jacks, #717).
   const speedUnit = speedUnitOf(st)
-  const seedStored = existing || initial || pickedExerciseConfig(ex.id, undefined, live)
+  const baseStored = existing || initial || pickedExerciseConfig(ex.id, undefined, live)
+  const seedStored = backupsEditable && existing && routine
+    ? projectedRoutineSlot(live, { ...existing, id: ex.id }, routine)
+    : baseStored
   const seed = viewTarget(live, ex.id, seedStored)
   const cardioEx = isCardio(ex.id) || modeOf({ ...seed, id: ex.id }) === 'cardio'
   const [c, setC] = useState(() => {
@@ -2695,7 +2724,14 @@ function ExConfig({ ex, existing, onSave, onDelete, onReplace, close, routine, i
       : next
   })
   // Back in the profile's unit, a number shown and left alone kept exactly as it was stored.
-  const saveAs = out => onSave(storedTarget(useStore.getState().S, ex.id, out, seedStored))
+  const saveAs = out => {
+    const stored = storedTarget(useStore.getState().S, ex.id, out, seedStored)
+    if (backupsEditable && existing && routine && (Number(out.weight) || 0) === (Number(seed.weight) || 0)) {
+      if (existing.weight != null) stored.weight = existing.weight
+      else delete stored.weight
+    }
+    onSave(stored)
+  }
   const save = () => {
     if (progressionStepInvalid) return
     close()
@@ -2716,10 +2752,10 @@ function ExConfig({ ex, existing, onSave, onDelete, onReplace, close, routine, i
       const restMin = Math.max(15, Math.min(600, Math.round(Number(c.restMin)) || DENSITY_FLOOR))
       if (restMin !== DENSITY_FLOOR) prog.restMin = restMin
     }
-    // Top set & back-offs (`rpt`): effort ramp and Set-1 effort floor, omitted at defaults.
+    // Top set & back-offs (`rpt`): per-set target RIRs and Set-1 effort floor, omitted at defaults.
     if (mode === 'reps' && activePolicy === 'rpt') {
-      const ramp = rptRampOf(c)
-      if (ramp !== RPT_DEFAULT_RAMP) prog.rptRamp = ramp
+      const rirs = rptTargetRirs(sets, c)
+      if (!isDefaultRptRirs(rirs, sets)) prog.rptRir = rirs
       const minRir = rptTopMinRirOf(c)
       if (minRir !== RPT_DEFAULT_MIN_RIR) prog.topMinRir = minRir
     }

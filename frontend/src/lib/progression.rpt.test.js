@@ -1,18 +1,19 @@
 import { describe, it, expect } from 'vitest'
 import {
   POLICIES, POLICIES_FOR, POLICY_NAME, POLICY_DESC, DELOAD_AFTER,
-  rptRampOf, rptTargetRirs, rptTopMinRirOf,
+  clampRptRir, defaultRptRirs, isDefaultRptRirs, rptRampOf, rptTargetRirs, rptTopMinRirOf,
   nextPrescription, readSession, stallCount, sessionsFor,
 } from './progression.js'
 import { isBackoff, snapBackoff, reactiveNextWeight, applyReactiveRpt } from './backoff.js'
 import { backoffGrid, withPlatePairs } from './plates.js'
 import { withDumbbells, withStack } from './dumbbells.js'
-import { buildSessionEntries, buildPlannedEntry, plannedConfigOf } from './session-start.js'
+import { buildSessionEntries, buildPlannedEntry, plannedConfigOf, projectedRoutineSlot } from './session-start.js'
+import { buildWidgetSnapshot } from './widgets.js'
 import { finishCompare } from './finish-compare.js'
 import { buildCompletedWorkout } from './finish-workout.js'
 import { buildPlanBundle, parsePlan, mergePlan } from './plan-share.js'
 import { convertStateUnit } from './units.js'
-import { withExUnit } from './ex-unit.js'
+import { withExUnit, viewTarget, exUnitOf } from './ex-unit.js'
 import { routineFromSession } from './session-routines.js'
 import { startProgramme } from './programmes.js'
 import { isWarmupRow, isSideSet, makeSideSet, setSideField, toggleSide, WEIGHT_ORIGIN_MANUAL } from './workout-model.js'
@@ -78,18 +79,20 @@ describe('Top set & back-offs (`rpt`) policy metadata & config helpers', () => {
     expect(DELOAD_AFTER.rpt).toBe(3)
   })
 
-  it('normalizes rptRamp, rptTargetRirs across 1–4+ sets, and topMinRir (preserving explicit 0 as Off)', () => {
-    expect(rptRampOf({})).toBe('8-9-10')
-    expect(rptRampOf({ rptRamp: '9-9-10' })).toBe('9-9-10')
-    expect(rptRampOf({ rptRamp: '9-9-9' })).toBe('9-9-9')
-    expect(rptRampOf({ rptRamp: 'bogus' })).toBe('8-9-10')
+  it('normalizes default & custom per-set rptRir across 1–4+ sets (2 sets -> 9->10, 3 sets -> 8->9->10) and topMinRir', () => {
+    expect(rptTargetRirs(1, {})).toEqual([1])
+    expect(rptTargetRirs(2, {})).toEqual([1, 0])
+    expect(rptTargetRirs(3, {})).toEqual([2, 1, 0])
+    expect(rptTargetRirs(4, {})).toEqual([2, 1, 1, 0])
 
-    expect(rptTargetRirs(3, '8-9-10')).toEqual([2, 1, 0])
-    expect(rptTargetRirs(4, '8-9-10')).toEqual([2, 1, 1, 0])
-    expect(rptTargetRirs(2, '8-9-10')).toEqual([2, 0])
-    expect(rptTargetRirs(1, '8-9-10')).toEqual([2])
-    expect(rptTargetRirs(3, '9-9-10')).toEqual([1, 1, 0])
-    expect(rptTargetRirs(3, '9-9-9')).toEqual([1, 1, 1])
+    // Custom Hack Squat 8->9->9 ([2, 1, 1]) and Isolation 10->10 ([0, 0])
+    expect(rptTargetRirs(3, { rptRir: [2, 1, 1] })).toEqual([2, 1, 1])
+    expect(rptTargetRirs(2, { rptRir: [0, 0] })).toEqual([0, 0])
+    // Adding a 4th set mid-workout pads from the last configured RIR
+    expect(rptTargetRirs(4, { rptRir: [2, 1, 1] })).toEqual([2, 1, 1, 1])
+    // Legacy rptRamp strings still resolve cleanly
+    expect(rptTargetRirs(3, { rptRamp: '9-9-9' })).toEqual([1, 1, 1])
+    expect(rptTargetRirs(3, { rptRamp: '9-9-10' })).toEqual([1, 1, 0])
 
     expect(rptTopMinRirOf({})).toBe(1)
     expect(rptTopMinRirOf({ topMinRir: 0 })).toBe(0)
@@ -248,15 +251,27 @@ describe('Equipment grid snapping (`snapBackoff`, `backoffGrid`) & live reactive
     const sideOut = applyReactiveRpt([s1, s2], 0, sideSpec)
     expect(sideOut[1].sides.L.w).toBeLessThan(20)
     expect(sideOut[1].sides.R.w).toBe(20)
-  })
-})
+    // Side-by-side Hack Squat (3 sets, custom 8->9->9) vs 2-set Isolation (10->10)
+    const hackSpec = { rirs: [2, 1, 1], repsMin: 6, reps: 8, grid: 5, floor: 20 }
+    let hackRows = applyReactiveRpt(
+      [{ w: 120, r: 7, rpe: 8, done: true }, { w: 120, r: 7, done: false }, { w: 120, r: 7, done: false }],
+      0,
+      hackSpec
+    )
+    expect(hackRows[1].w).toBe(120) // Set 2 allows RPE 9 (+1 RPE headroom) -> stays 120 kg
+    hackRows = applyReactiveRpt([hackRows[0], { w: 120, r: 7, rpe: 9, done: true }, hackRows[2]], 1, hackSpec)
+    expect(hackRows[2].w).toBeLessThan(120) // Set 3 capped at RPE 9 (no failure buffer!) -> drops load!
 
-describe('First session & warm-up ramping', () => {
+    const isoSpec = { rirs: [0, 0], repsMin: 8, reps: 12, grid: 2.5, floor: 2.5 }
+    expect(applyReactiveRpt([{ w: 15, r: 11, rpe: 10, done: true }, { w: 15, r: 10, done: false }], 0, isoSpec)[1].w).toBe(15)
+    expect(applyReactiveRpt([{ w: 15, r: 8, rpe: 10, done: true }, { w: 15, r: 10, done: false }], 0, isoSpec)[1].w).toBe(12.5)
+  })
+
   it('opens all working sets at the top weight with `target.rpt` metadata and ramps warm-ups to Set 1', () => {
     const r = rig({ id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 80, warmupSets: 2, prog: 'rpt' })
     const entry = r.open()
     expect(entry.plan).toMatchObject({ policy: 'rpt', kind: 'first', weight: 80, reps: 7 })
-    expect(entry.target).toMatchObject({ weight: 80, reps: 7, rpt: { ramp: '8-9-10', repsMin: 7, reps: 10 } })
+    expect(entry.target).toMatchObject({ weight: 80, reps: 7, rpt: { rirs: [2, 1, 0], repsMin: 7, reps: 10 } })
     expect(entry.sets.filter(isWarmupRow).map(s => [s.w, s.r])).toEqual([[40, 7], [60, 7]])
     expect(work(entry.sets).map(s => [s.w, s.r])).toEqual([[80, 7], [80, 7], [80, 7]])
   })
@@ -401,29 +416,29 @@ describe('Bodyweight (`0 kg`) inheritance guard, assisted lifts, and downstream 
     expect(ra.open().plan).toMatchObject({ kind: 'up', weight: 35, reps: 8 })
   })
 
-  it('finishCompare, plan-share (`rptRamp` + `topMinRir`), units, and session-routines round-trip cleanly', () => {
-    const cfg = { id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 80, inc: 2.5, prog: 'rpt', rptRamp: '9-9-10', topMinRir: 0 }
+  it('finishCompare, plan-share (`rptRir` + `topMinRir`), units, and session-routines round-trip cleanly', () => {
+    const cfg = { id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 80, inc: 2.5, prog: 'rpt', rptRir: [2, 1, 1], topMinRir: 0 }
     const r = rig(cfg)
     const saved = r.train((s, k) => (k === 0 ? { r: 10, rpe: 10 } : { r: 8 }))
     expect(finishCompare(r.st, saved)[0].next).toEqual({ w: 82.5, r: 7, sets: 3, kind: 'up' })
 
-    const defaultEx = { id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt', rptRamp: '8-9-10', topMinRir: 1 }
+    const defaultEx = { id: BENCH, sets: 2, reps: 10, repsMin: 7, weight: 80, prog: 'rpt', rptRir: [1, 0], topMinRir: 1 }
     const bundle = buildPlanBundle({ unit: 'kg', week: { 1: ['r1'] }, routines: [{ id: 'r1', name: 'Push', ex: [cfg, defaultEx] }] }, 'RPT Plan')
-    expect(bundle.routines[0].ex[0]).toMatchObject({ prog: 'rpt', rptRamp: '9-9-10', topMinRir: 0 })
-    expect(bundle.routines[0].ex[1].rptRamp).toBeUndefined()
+    expect(bundle.routines[0].ex[0]).toMatchObject({ prog: 'rpt', rptRir: [2, 1, 1], topMinRir: 0 })
+    expect(bundle.routines[0].ex[1].rptRir).toBeUndefined()
     expect(bundle.routines[0].ex[1].topMinRir).toBeUndefined()
 
     const raw = JSON.parse(JSON.stringify(bundle))
-    raw.routines[0].ex[1].rptRamp = 'evil'
+    raw.routines[0].ex[1].rptRir = [1, 0] // default for 2 sets -> omitted
     raw.routines[0].ex[1].topMinRir = 'evil'
     const parsed = parsePlan(JSON.stringify(raw), 'kg')
-    expect(parsed.routines[0].ex[0]).toMatchObject({ prog: 'rpt', rptRamp: '9-9-10', topMinRir: 0 })
-    expect(parsed.routines[0].ex[1].rptRamp).toBeUndefined()
+    expect(parsed.routines[0].ex[0]).toMatchObject({ prog: 'rpt', rptRir: [2, 1, 1], topMinRir: 0 })
+    expect(parsed.routines[0].ex[1].rptRir).toBeUndefined()
     expect(parsed.routines[0].ex[1].topMinRir).toBeUndefined()
 
     const dest = { unit: 'kg', routines: [], week: {}, customEx: [] }
     mergePlan(dest, parsed, { schedule: true })
-    expect(dest.routines[0].ex[0]).toMatchObject({ prog: 'rpt', rptRamp: '9-9-10', topMinRir: 0 })
+    expect(dest.routines[0].ex[0]).toMatchObject({ prog: 'rpt', rptRir: [2, 1, 1], topMinRir: 0 })
 
     // Legacy rowWeights on old saved entries still convert across profile unit switches
     const legacyState = {
@@ -497,7 +512,7 @@ describe('Review follow-up regressions (Items 1–4 & preserved invariants)', ()
   })
 
   it('Item 4: running programmes keep `target.rpt` reactive metadata across %1RM, RPE-only, deload weeks, and pinned units', () => {
-    const cfg = { id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt', rptRamp: '9-9-10' }
+    const cfg = { id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt', rptRir: [2, 1, 1] }
     const r = rig(cfg)
     r.train((s, k) => (k === 0 ? { w: 100, r: 5, rpe: 8 } : { w: 80, r: 8 }))
     r.st = {
@@ -514,12 +529,253 @@ describe('Review follow-up regressions (Items 1–4 & preserved invariants)', ()
     r.st.active = { id: 'pw1', d: '2026-05-04' }
     const w1 = buildSessionEntries(r.st, r.routine)[0]
     expect(w1.plan.kind).toBe('programme')
-    expect(w1.target.rpt).toEqual({ ramp: '9-9-10', repsMin: 7, reps: 10 })
+    expect(w1.target.rpt).toEqual({ rirs: [2, 1, 1], repsMin: 7, reps: 10 })
     expect(work(w1.sets).map(s => s.w)).toEqual([87.5, 87.5, 87.5])
 
     r.st.active = { id: 'pw3', d: '2026-05-18' }
     const w3 = buildSessionEntries(r.st, r.routine)[0]
     expect(w3.noProg).toBe(true)
-    expect(w3.target.rpt).toEqual({ ramp: '9-9-10', repsMin: 7, reps: 10 })
+    expect(w3.target.rpt).toEqual({ rirs: [2, 1, 1], repsMin: 7, reps: 10 })
+  })
+})
+
+describe('Exhaustive stress, property invariants, multi-week simulation, and projection matrix', () => {
+  it('holds boundedness, monotonicity, and malformed-input safety across 1,000+ reactive combinations', () => {
+    // Malformed / hostile rptRir & count values never throw and clamp cleanly to 0.5 steps in [0, 4]
+    expect(defaultRptRirs(0)).toEqual([])
+    expect(defaultRptRirs(-4)).toEqual([])
+    expect(defaultRptRirs(NaN)).toEqual([])
+    expect(defaultRptRirs(1)).toEqual([1])
+    expect(defaultRptRirs(2)).toEqual([1, 0])
+    expect(defaultRptRirs(5)).toEqual([2, 1, 1, 1, 0])
+    expect(clampRptRir(NaN)).toBe(1)
+    expect(clampRptRir(Infinity)).toBe(1)
+    expect(clampRptRir(-9)).toBe(0)
+    expect(clampRptRir(99)).toBe(4)
+    expect(clampRptRir(1.26)).toBe(1.5)
+    expect(rptTargetRirs(4, { rptRir: ['1.5', null, -3, 99, 2.2] })).toEqual([1.5, 0, 0, 4])
+    expect(rptTargetRirs(4, { rptRir: [0.5] })).toEqual([0.5, 0.5, 0.5, 0.5])
+    expect(isDefaultRptRirs([1, 0], 2)).toBe(true)
+    expect(isDefaultRptRirs([0, 0], 2)).toBe(false)
+    expect(isDefaultRptRirs([2, 1, 1, 0], 4)).toBe(true)
+    expect(isDefaultRptRirs([2, 1, 1, 1], 4)).toBe(false)
+
+    // Zero / negative / missing weight or reps on source set are safe no-ops
+    expect(reactiveNextWeight({ w: 0, r: 8, rir: 0 }, { grid: 2.5 })).toBe(0)
+    expect(reactiveNextWeight({ w: 60, r: 0, rir: 0 }, { grid: 2.5 })).toBe(60)
+    expect(reactiveNextWeight({}, {})).toBe(0)
+
+    const ranges = [[4, 6], [6, 8], [6, 10], [8, 12], [12, 20], [5, 5]]
+    const grids = [
+      { grid: 1.25, floor: 0 },
+      { grid: 2.5, floor: 20 },
+      { grid: 5, floor: 0 },
+      { grid: [6.8, 11.3, 15.9, 20.4, 25, 29.5, 34, 41, 50], floor: 0 },
+      { grid: [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 30], floor: 0 },
+    ]
+    const weights = [12, 25, 29.5, 60, 102.5]
+    const loggedRirs = [0, 0.5, 1, 1.5, 2, 3]
+    const nextRirs = [0, 0.5, 1, 2]
+
+    for (const [repsMin, repsMax] of ranges) {
+      for (const { grid, floor } of grids) {
+        for (const w of weights) {
+          for (const currentRir of [2, 1, 0]) {
+            for (const nextRir of nextRirs) {
+              let prevByReps = 0
+              for (let r = 1; r <= repsMax + 3; r++) {
+                let prevByRir = 0
+                for (const rir of loggedRirs) {
+                  const out = reactiveNextWeight(
+                    { w, r, rir },
+                    { currentRir, nextRir, repsMin, repsMax, grid, floor }
+                  )
+                  expect(Number.isFinite(out)).toBe(true)
+                  expect(out).toBeGreaterThan(0)
+                  expect(out).toBeLessThanOrEqual(w + 1e-9)
+                  if (floor > 0 && w >= floor) expect(out).toBeGreaterThanOrEqual(floor - 1e-9)
+                  if (Array.isArray(grid) && w >= grid[0]) {
+                    // Either stayed at `w` or snapped onto an actual pin/dumbbell in `grid`
+                    expect(out === w || grid.some(pin => Math.abs(pin - out) < 1e-6)).toBe(true)
+                  }
+                  // Monotonicity in logged RIR: having MORE reps in reserve never drops you lighter
+                  expect(out).toBeGreaterThanOrEqual(prevByRir - 1e-9)
+                  prevByRir = out
+                }
+                // Monotonicity in logged reps (at fixed RIR = 1): getting MORE reps never drops you lighter
+                const atRir1 = reactiveNextWeight(
+                  { w, r, rir: 1 },
+                  { currentRir, nextRir, repsMin, repsMax, grid, floor }
+                )
+                expect(atRir1).toBeGreaterThanOrEqual(prevByReps - 1e-9)
+                prevByReps = atRir1
+              }
+            }
+          }
+        }
+      }
+    }
+  })
+
+  it('snaps reactive drops onto non-linear machine stacks, owned dumbbells, custom plate pairs, and asymmetric per-side sets', () => {
+    // Non-linear cable stack: 29.5 kg x 6 @ RPE 9.5 -> drops strictly onto a real stack pin (25 or 20.4), never 27.5
+    let stStack = { unit: 'kg', effort: 'rpe', workouts: [], routines: [] }
+    stStack = withStack(stStack, CABLE_ROW, [6.8, 11.3, 15.9, 20.4, 25, 29.5, 34, 40.8])
+    const stackCfg = { id: CABLE_ROW, sets: 3, reps: 10, repsMin: 6, weight: 29.5, prog: 'rpt', rptRir: [1, 1, 0] }
+    const stackGrid = backoffGrid(stStack, stackCfg)
+    const stackRows = [
+      { w: 29.5, r: 6, rpe: 9.5, done: true },
+      { w: 29.5, r: 6, done: false },
+      { w: 29.5, r: 6, done: false },
+    ]
+    const afterStack = applyReactiveRpt(stackRows, 0, { rirs: [1, 1, 0], repsMin: 6, reps: 10, grid: stackGrid, floor: 0 })
+    expect([20.4, 25]).toContain(afterStack[1].w)
+    expect(afterStack[2].w).toBe(afterStack[1].w)
+
+    // Custom barbell plate inventory (only 20 kg bar + 5 kg pairs = 10 kg jumps: 20, 30, 40, 50, 60, 70, 80)
+    let stPlates = { unit: 'kg', effort: 'rpe', workouts: [], routines: [] }
+    stPlates = withPlatePairs(stPlates, [[5, 6]])
+    const benchCfg = { id: BENCH, sets: 3, reps: 10, repsMin: 6, weight: 80, prog: 'rpt', rptRir: [2, 1, 1] }
+    const plateGrid = backoffGrid(stPlates, benchCfg)
+    const plateRows = [
+      { w: 80, r: 6, rpe: 10, done: true },
+      { w: 80, r: 6, done: false },
+      { w: 80, r: 6, done: false },
+    ]
+    const afterPlate = applyReactiveRpt(plateRows, 0, { rirs: [2, 1, 1], repsMin: 6, reps: 10, grid: plateGrid, floor: 20 })
+    expect(afterPlate[1].w % 10).toBe(0)
+    expect(afterPlate[1].w).toBeLessThan(80)
+    expect(afterPlate[1].w).toBeGreaterThanOrEqual(20)
+
+    // Unilateral per-side asymmetry: L cruises at 24x9 @ RPE 8 (stays 24), R grinds 24x6 @ RPE 10 (drops to 20/22)
+    // and Set 3 L has a manual weight lock (22 kg) that is respected!
+    const s1 = toggleSide(
+      toggleSide(
+        setSideField(setSideField(setSideField(setSideField(makeSideSet({ w: 24, r: 16 }), 'L', 'r', 9), 'L', 'rpe', 8), 'R', 'r', 6), 'R', 'rpe', 10),
+        'L'
+      ),
+      'R'
+    )
+    const s2 = makeSideSet({ w: 24, r: 16 })
+    const s3Base = makeSideSet({ w: 24, r: 16 })
+    const s3 = {
+      ...s3Base,
+      sides: { ...s3Base.sides, L: { ...s3Base.sides.L, w: 22, weightOrigin: WEIGHT_ORIGIN_MANUAL } },
+    }
+    const afterSide = applyReactiveRpt([s1, s2, s3], 0, { rirs: [2, 1, 0], repsMin: 12, reps: 20, grid: 2, floor: 0 })
+    expect(afterSide[1].sides.L.w).toBe(24)
+    expect(afterSide[1].sides.R.w).toBeLessThan(24)
+    expect(afterSide[2].sides.L.w).toBe(22) // manual lock untouched
+    expect(afterSide[2].sides.R.w).toBe(afterSide[1].sides.R.w)
+  })
+
+  it('simulates multi-week non-linear Pull vs Upper T-Bar Row training without cross-routine collision or historical range drift', () => {
+    const pullCfg = { id: CABLE_ROW, sets: 3, reps: 10, repsMin: 6, weight: 25, inc: 1.25, prog: 'rpt', rptRir: [1, 1, 0], topMinRir: 1 }
+    const upperCfg = { id: CABLE_ROW, sets: 3, reps: 10, repsMin: 6, weight: 25, inc: 1.25, prog: 'rpt', rptRir: [2, 1, 0], topMinRir: 1 }
+    const pull = { id: 'r-pull', name: 'Pull', ex: [pullCfg] }
+    const upper = { id: 'r-upper', name: 'Upper', ex: [upperCfg] }
+    let S = { unit: 'kg', effort: 'rpe', workouts: [], exWeights: {}, routines: [pull, upper], week: { 1: ['r-pull'], 4: ['r-upper'] } }
+
+    const logSession = (routine, d, setSpecs) => {
+      const [built] = buildSessionEntries(S, routine)
+      const sets = setSpecs.map(([w, r, rpe]) => ({ w, r, rpe, done: true }))
+      const wk = buildCompletedWorkout({
+        id: `w-${d}-${routine.id}`, d, start: 1000, routineId: routine.id, routineIds: [routine.id], name: routine.name,
+        entries: [{ ...built, rid: routine.id, sets }],
+      }, { end: 2000 })
+      S = { ...S, workouts: [...S.workouts, wk] }
+      return built
+    }
+
+    // 16 Nov Pull: 25x8 @9, 25x7 @9.5, 20x8 @10 -> Pull next aims for 25 x 9
+    logSession(pull, '2026-11-16', [[25, 8, 9], [25, 7, 9.5], [20, 8, 10]])
+    expect(nextPrescription(S, pullCfg, pull)).toMatchObject({ kind: 'hold', weight: 25, reps: 9 })
+
+    // 19 Nov Upper: 25x6 @8, 21.25x7 @9, 20x8 @10 -> Upper next aims for 25 x 7 (Pull stays at 25 x 9!)
+    logSession(upper, '2026-11-19', [[25, 6, 8], [21.25, 7, 9], [20, 8, 10]])
+    expect(nextPrescription(S, upperCfg, upper)).toMatchObject({ kind: 'hold', weight: 25, reps: 7 })
+    expect(nextPrescription(S, pullCfg, pull)).toMatchObject({ kind: 'hold', weight: 25, reps: 9 })
+
+    // 23 Nov Pull (dip day: 25x7 @9 instead of 9, still >= 6 so NOT a stall!): aims for 25 x 8 next
+    logSession(pull, '2026-11-23', [[25, 7, 9], [22.5, 8, 9], [22.5, 7, 10]])
+    expect(stallCount(sessionsFor(S, CABLE_ROW, pullCfg, 'r-pull'), 'rpt', pullCfg)).toBe(0)
+    expect(nextPrescription(S, pullCfg, pull)).toMatchObject({ kind: 'hold', weight: 25, reps: 8 })
+
+    // 27 Nov Upper: 25x10 @10 (hit 10 reps, but RPE 10 > gate RPE 9!) -> holds 25 kg @ 10 reps
+    logSession(upper, '2026-11-27', [[25, 10, 10], [21.25, 8, 9.5], [20, 7, 10]])
+    expect(nextPrescription(S, upperCfg, upper)).toMatchObject({ kind: 'hold', weight: 25, reps: 10 })
+
+    // 30 Nov Upper: 25x10 @9 (clean!) -> Upper moves up to 26.25 kg x 6, while Pull is STILL at 25 kg!
+    logSession(upper, '2026-11-30', [[25, 10, 9], [22.5, 8, 9], [21.25, 8, 10]])
+    expect(projectedRoutineSlot(S, upperCfg, upper).weight).toBe(26.25)
+    expect(projectedRoutineSlot(S, pullCfg, pull).weight).toBe(25)
+
+    // Shrinking Pull's rep range from 6-10 down to 6-8 later: planChanged triggers cleanly at 25 kg
+    const pull6to8 = { ...pullCfg, reps: 8, repsMin: 6 }
+    const pullTight = { ...pull, ex: [pull6to8] }
+    expect(nextPrescription(S, pull6to8, pullTight)).toMatchObject({ kind: 'hold', weight: 25, reps: 8 })
+  })
+
+  it('projects routine weights accurately across RoutineEdit, widgets, deload routines, assisted 0-help, bodyweight, and pinned lb', () => {
+    const benchLb = { id: BENCH, sets: 2, reps: 10, repsMin: 6, weight: Math.round(185 * 0.45359237 * 1e4) / 1e4, prog: 'rpt', rptRir: [0, 0] }
+    const assistCfg = { id: ASSISTED_DIP, sets: 3, reps: 8, weight: 5, inc: 5, prog: 'linear' }
+    const bwUnweighted = { id: PUSHUP, sets: 3, reps: 12, repsMax: 20, weight: 0, bodyweight: true }
+    const bwWeighted = { id: PUSHUP, sets: 3, reps: 8, weight: 10, inc: 2.5, bodyweight: true, prog: 'linear' }
+    const cardioCfg = { id: '2138', mode: 'cardio', sets: 1, min: 20, speed: 10 }
+    const routine = { id: 'r-mix', name: 'Full', ex: [benchLb, assistCfg, bwUnweighted, bwWeighted, cardioCfg] }
+    const deloadRoutine = { id: 'r-deload', name: 'Deload', excludeFromProgression: true, ex: [bwWeighted] }
+
+    let S = {
+      unit: 'kg',
+      effort: 'rpe',
+      exUnit: withExUnit({}, BENCH, 'lb', 1),
+      routines: [routine, deloadRoutine],
+      week: { 5: ['r-mix'] }, // Friday = 2026-11-27
+      workouts: [{
+        id: 'w1', d: '2026-11-20', routineId: 'r-mix', routineIds: ['r-mix'], name: 'Full',
+        entries: [
+          {
+            id: BENCH, rid: 'r-mix',
+            planned: { sets: 2, reps: 10, repsMin: 6, weight: benchLb.weight },
+            target: { ...benchLb },
+            sets: [{ w: benchLb.weight, r: 10, rpe: 8.5, done: true }, { w: benchLb.weight, r: 7, rpe: 10, done: true }],
+          },
+          {
+            id: ASSISTED_DIP, rid: 'r-mix',
+            planned: { sets: 3, reps: 8, weight: 5 },
+            target: { ...assistCfg, weight: 5 },
+            sets: [{ w: 5, r: 8, done: true }, { w: 5, r: 8, done: true }, { w: 5, r: 8, done: true }],
+          },
+          {
+            id: PUSHUP, rid: 'r-mix',
+            planned: { sets: 3, reps: 8, weight: 10 },
+            target: { ...bwWeighted, weight: 10 },
+            sets: [{ w: 10, r: 8, done: true }, { w: 10, r: 8, done: true }, { w: 10, r: 8, done: true }],
+          },
+        ],
+      }],
+    }
+
+    // Pinned lb bench progressed 185 lb -> 190 lb
+    const projBench = viewTarget(S, BENCH, projectedRoutineSlot(S, benchLb, routine))
+    expect(exUnitOf(S, BENCH)).toBe('lb')
+    expect(projBench.weight).toBe(190)
+
+    // Assisted dip progressed from 5 kg help -> 0 kg help!
+    expect(projectedRoutineSlot(S, assistCfg, routine).weight).toBe(0)
+
+    // Unweighted bodyweight keeps weight: 0 and repsMax: 20 untouched; weighted bodyweight projects 12.5 kg
+    expect(projectedRoutineSlot(S, bwUnweighted, routine)).toBe(bwUnweighted)
+    expect(projectedRoutineSlot(S, bwWeighted, routine).weight).toBe(12.5)
+
+    // Deload routine & cardio stay untouched
+    expect(projectedRoutineSlot(S, bwWeighted, deloadRoutine)).toBe(bwWeighted)
+    expect(projectedRoutineSlot(S, cardioCfg, routine)).toBe(cardioCfg)
+
+    // Home Screen / Lock Screen widget snapshot for Friday 2026-11-27 shows live progressed weights
+    const snap = buildWidgetSnapshot(S, { today: '2026-11-27' })
+    const todayWidgetLines = snap.days[0].exercises.map(x => x.line)
+    expect(todayWidgetLines[0]).toContain('190 lb')
+    expect(todayWidgetLines[3]).toContain('+12.5 kg')
   })
 })

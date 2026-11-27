@@ -799,29 +799,29 @@ test('Top set & back-offs (`rpt`) policy and config fields survive created plans
     routines: [{
       id: 'r1', name: 'Upper', prog: 'rpt',
       ex: [
-        { id: '0009', sets: 3, reps: 10, repsMin: 7, prog: 'rpt', rptRamp: '9-9-10', topMinRir: 0 },
-        { id: '0043', sets: 3, reps: 10, prog: 'rpt', rptRamp: 'wild', topMinRir: 9 }
+        { id: '0009', sets: 3, reps: 10, repsMin: 7, prog: 'rpt', rptRir: [2, 1, 1], topMinRir: 0 },
+        { id: '0043', sets: 3, reps: 10, prog: 'rpt', rptRir: [-1, 99], topMinRir: 9 }
       ]
     }]
   });
   assert.equal(created.ok, true);
   assert.equal(created.bundle.routines[0].prog, 'rpt');
   assert.deepEqual(
-    [created.bundle.routines[0].ex[0].prog, created.bundle.routines[0].ex[0].rptRamp, created.bundle.routines[0].ex[0].topMinRir],
-    ['rpt', '9-9-10', 0]
+    [created.bundle.routines[0].ex[0].prog, created.bundle.routines[0].ex[0].rptRir, created.bundle.routines[0].ex[0].topMinRir],
+    ['rpt', [2, 1, 1], 0]
   );
-  assert.equal(created.bundle.routines[0].ex[1].rptRamp, undefined);
+  assert.equal(created.bundle.routines[0].ex[1].rptRir, undefined);
   assert.equal(created.bundle.routines[0].ex[1].topMinRir, undefined);
 
   assert.equal(review([change({ type: 'exercise-prog', after: 'rpt' })]).ok, true);
   assert.equal(review([change({ type: 'routine-prog', target: { routineId: 'r1' }, after: 'rpt' })]).ok, true);
   const added = review([change({
     type: 'add-exercise', target: { routineId: 'r1' },
-    after: { id: '0009', sets: 3, reps: 10, repsMin: 7, prog: 'rpt', rptRamp: '9-9-9', topMinRir: 2 }
+    after: { id: '0009', sets: 2, reps: 10, repsMin: 7, prog: 'rpt', rptRir: [0, 0], topMinRir: 2 }
   })]);
   assert.equal(added.ok, true);
   assert.deepEqual(
-    [added.proposal.changes[0].after.prog, added.proposal.changes[0].after.rptRamp, added.proposal.changes[0].after.topMinRir],
-    ['rpt', '9-9-9', 2]
+    [added.proposal.changes[0].after.prog, added.proposal.changes[0].after.rptRir, added.proposal.changes[0].after.topMinRir],
+    ['rpt', [0, 0], 2]
   );
 });
