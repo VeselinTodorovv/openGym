@@ -23,7 +23,7 @@ import { normalizeRepRange } from './rep-range.js'
 import { nextRung } from './ladders.js'
 import { gymSplitView } from './gym-split.js'
 import { isPyramid } from './pyramid.js'
-import { backoffAt, rptWeightsFrom } from './backoff.js'
+import { backoffAt, RPT_RAMPS, RPT_DEFAULT_RAMP, rptRampOf, rptTargetRirs } from './backoff.js'
 import { ownedWeightsFor, ownedKindFor, ownedUp, ownedDeload, ownedAround } from './dumbbells.js'
 import { rirOf } from './effort.js'
 
@@ -56,7 +56,7 @@ export const POLICY_DESC = {
   double: 'Work up through a rep range at the same weight. Reach the top of the range in every set and the weight goes up, reps back to the bottom.',
   triple: 'Reps climb to the top of the range, then a set is added, up to your most sets. All of them at the top and the weight goes up, back to your first sets and reps.',
   steady: 'Work up a rep range one rep at a time. Every set has to hit the target before it moves, and at the top of the range the weight goes up.',
-  rpt: 'Push the first set through a rep range, with lighter back-off sets after it. Hit the top of the range with enough in reserve and the weight goes up.',
+  rpt: 'Push set 1 through a rep range, then adjust later sets from your reps and effort to stay in range. Hit the top of the range cleanly and the weight goes up.',
   undulating: 'Each session rotates: a medium day at your reps, a heavy day with fewer, a light day with more. The weights come from your estimated max, so they climb as you get stronger.',
   density: 'Same weight, a bit less rest each time every set is clean. At your shortest rest the weight goes up and the rest starts over.',
   ladder: 'For bodyweight skills. One more rep each clean session up to the top of the range, then the next, harder variation of the ladder, back at the bottom.',
@@ -67,36 +67,15 @@ export const POLICY_DESC = {
 // default out of saved configs so plans written before this policy stays byte-for-byte compatible.
 export const DELOAD_FACTOR = 0.9
 export const DELOAD_AFTER = { linear: 3, greyskull: 1, double: 3, steady: 3, triple: 3, rpt: 3, density: 3, time: 3 }
-export const RPT_PCTS = [5, 10, 15]
-export const RPT_DEFAULT_PCT = 10
-export const RPT_MODES = ['flat', 'step']
-export const RPT_DEFAULT_MODE = 'flat'
+export { RPT_RAMPS, RPT_DEFAULT_RAMP, rptRampOf, rptTargetRirs }
 export const RPT_MIN_RIRS = [0, 1, 2]
 export const RPT_DEFAULT_MIN_RIR = 1
 
-export function rptBackoffPctOf(cfg) {
-  const n = Number(cfg?.backoffPct)
-  return RPT_PCTS.includes(n) ? n : RPT_DEFAULT_PCT
-}
-export function rptBackoffModeOf(cfg) {
-  return cfg?.backoffMode === 'step' ? 'step' : RPT_DEFAULT_MODE
-}
 export function rptTopMinRirOf(cfg) {
   const raw = cfg?.topMinRir
   if (raw === 0 || raw === '0' || raw === 'off' || raw === false) return 0
   const n = Number(raw)
   return RPT_MIN_RIRS.includes(n) ? n : RPT_DEFAULT_MIN_RIR
-}
-export function rptRowWeights(topWeight, setsCount, cfg, { grid = 2.5, floor = 0, assisted = false } = {}) {
-  const n = Math.max(1, Math.round(Number(setsCount)) || 1)
-  const top = Number(topWeight) || 0
-  if (!(top > 0) || assisted) return null
-  return rptWeightsFrom(top, n, {
-    pct: rptBackoffPctOf(cfg),
-    mode: rptBackoffModeOf(cfg),
-    grid,
-    floor,
-  })
 }
 export const DELOAD_FACTOR_MIN = 0.5
 export const DELOAD_FACTOR_MAX = 0.95
@@ -664,12 +643,9 @@ export function nextPrescription(S, cfg, routine, opts = {}) {
   // Steady double progression starts a range at its bottom, every set together.
   const steady = policy === 'steady' && mode === 'reps'
   const rangeS = steady ? normalizeRepRange(cfg.reps || last?.goal || 10, cfg.repsMin, repStep(cfg)) : null
-  // "Top set & back-offs" (`rpt`): Set 1 climbs the range, trailing sets drop by percentage on the gym's grid.
+  // "Top set & back-offs" (`rpt`): Set 1 climbs the range, later sets adjust live from reps & effort.
   const rpt = policy === 'rpt' && mode === 'reps'
   const rangeR = rpt ? normalizeRepRange(cfg.reps || last?.goal || 10, cfg.repsMin, repStep(cfg)) : null
-  const rptGrid = opts?.grid || owned || inc
-  const rptFloor = opts?.floor ?? barFloor(S, cfg.id)
-  const rowsFor = w => rptRowWeights(w, cfg.sets, cfg, { grid: rptGrid, floor: rptFloor, assisted })
   if (policy === 'ladder' && mode === 'reps') return ladderPrescription(S, cfg, last, policy)
   if (policy === 'undulating' && mode === 'reps') {
     const out = undulatingPrescription(S, cfg, { policy, inc, unit, owned, assisted })
@@ -680,12 +656,10 @@ export function nextPrescription(S, cfg, routine, opts = {}) {
       const conf = (S.exWeights || {})[cfg.id]
       const startW = conf && conf.w > 0 ? conf.w : (cfg.weight > 0 ? cfg.weight : 0)
       if (isBw(cfg) && !(startW > 0)) return { policy, kind: 'first', why: ['Nothing logged yet, so this session sets the baseline.'] }
-      const rowWeights = startW > 0 ? rowsFor(startW) : null
       return {
         policy, kind: 'first',
         ...(startW > 0 ? { weight: startW } : {}),
         reps: rangeR.repsMin,
-        ...(rowWeights ? { rowWeights } : {}),
         why: ['Nothing logged yet, so this session sets the baseline.']
       }
     }
@@ -729,8 +703,7 @@ export function nextPrescription(S, cfg, routine, opts = {}) {
     if (rpt) {
       const prevReps = last.topSet ? last.topSet.r : last.low
       const aim = set ? rangeR.repsMin : Math.min(rangeR.reps, Math.max(rangeR.repsMin, prevReps + repStep(cfg)))
-      const rowWeights = held.weight > 0 ? rowsFor(held.weight) : null
-      return { policy, kind: 'hold', ...held, reps: aim, ...(rowWeights ? { rowWeights } : {}), why }
+      return { policy, kind: 'hold', ...held, reps: aim, why }
     }
     if (policy === 'double' || steady) {
       const range = normalizeRepRange(cfg.reps || last.goal || 10, cfg.repsMin, repStep(cfg))
@@ -795,10 +768,6 @@ export function nextPrescription(S, cfg, routine, opts = {}) {
   // There is nothing to progress from, so it asks for the weight: the plan's, when it has one.
   // Only a bar, a bell, a stack or a sled gets here; an ab wheel at 0 climbed reps above.
   if (w <= 0) {
-    if (rpt && cfg.weight > 0) {
-      const rowWeights = rowsFor(cfg.weight)
-      return { policy, kind: 'hold', weight: cfg.weight, reps: rangeR.repsMin, ...(rowWeights ? { rowWeights } : {}), why: ['No weight logged last time. Enter what you lift and progression takes it from there.'] }
-    }
     return { policy, kind: 'hold', ...(cfg.weight > 0 ? { weight: cfg.weight } : {}), ...(rpt ? { reps: rangeR.repsMin } : {}), why: ['No weight logged last time. Enter what you lift and progression takes it from there.'] }
   }
 
@@ -914,34 +883,30 @@ export function nextPrescription(S, cfg, routine, opts = {}) {
     const set1 = last.topSet
     const prescribedTop = Number(last.target?.weight) || 0
     const atTopLoad = !(prescribedTop > 0) || (set1 && (assisted ? set1.w <= prescribedTop + 0.05 : set1.w >= prescribedTop - 0.05))
-    const withRows = (base, targetW) => {
-      const rw = rowsFor(targetW)
-      return rw ? { ...base, rowWeights: rw } : base
-    }
     if (stalls >= deloadAt) {
       const selected = epleyDeload()
-      if (selected) return withRows(selected, selected.weight)
+      if (selected) return selected
       const dw = easier(w)
-      return withRows({
+      return {
         policy, kind: 'deload', weight: dw, reps: bottom,
         why: assisted
           ? ['Stuck for {0} sessions. Back to {1} {2} of help, then build up again.', stalls, dw, unit]
           : ['Stuck for {0} sessions. Deload to {1} {2}.', stalls, dw, unit]
-      }, dw)
+      }
     }
     if (!set1 || !atTopLoad) {
       const holdW = set1 && set1.w > 0 ? set1.w : w
       const aim = set1 && set1.r >= bottom
         ? Math.min(top, Math.max(bottom, set1.r >= top ? top : set1.r + step))
         : bottom
-      return withRows({
+      return {
         policy, kind: 'hold', weight: holdW, reps: aim,
         why: !set1
           ? ['Top set was not logged last time. Same weight again ({0} of {1} to go).', deloadAt - stalls, deloadAt]
           : set1.r >= bottom
             ? ['Top set was lighter than planned. Hold {0} {1} and aim for {2} reps.', holdW, unit, aim]
             : ['Top set missed {0} reps last time. Same weight again ({1} of {2} to go).', bottom, deloadAt - stalls, deloadAt]
-      }, holdW)
+      }
     }
     if (set1.r >= top) {
       const minRir = rptTopMinRirOf(cfg)
@@ -952,29 +917,39 @@ export function nextPrescription(S, cfg, routine, opts = {}) {
         const why = scale === 'rpe'
           ? ['Top set hit {0} reps at RPE {1} (above RPE {2}). Hold {3} {4} until it moves cleaner.', set1.r, loggedVal, 10 - minRir, w, unit]
           : ['Top set hit {0} reps with {1} RIR (need {2}+ RIR). Hold {3} {4} until you have more in reserve.', set1.r, loggedVal, minRir, w, unit]
-        return withRows({ policy, kind: 'hold', weight: w, reps: top, why }, w)
+        return { policy, kind: 'hold', weight: w, reps: top, why }
       }
-      if (topped(w)) return withRows(toppedOut(w, { reps: top }), w)
+      if (topped(w)) return toppedOut(w, { reps: top })
       const up = harder(w, inc)
       const by = owned ? Math.round((up - w) * 100) / 100 : inc
-      return withRows({
+      return {
         policy, kind: 'up', weight: up, reps: bottom,
         why: assisted
           ? ['Top set hit {0} reps. {1} {2} less help, back to {3} reps.', set1.r, inc, unit, bottom]
           : ['Top set hit {0} reps. {1} {2} more, back to {3} reps.', set1.r, by, unit, bottom]
-      }, up)
+      }
     }
     if (set1.r >= bottom) {
       const aim = Math.min(top, Math.max(bottom, set1.r + step))
-      return withRows({
+      const topScore = s => (s.topSet?.r || 0) + Math.max(0, Math.min(4, s.topSet?.rir ?? 0)) * 0.5
+      const priorAtWeight = []
+      for (let j = sessions.length - 2; j >= 0 && Math.abs(sessions[j].weight - w) <= 0.05; j--) {
+        if (!sessions[j].topSet || sessions[j].topSet.r < bottom) break
+        priorAtWeight.push(topScore(sessions[j]))
+      }
+      const runLen = priorAtWeight.length + 1
+      const flat = runLen >= 4 && topScore(last) <= Math.max(...priorAtWeight) + 1e-9
+      return {
         policy, kind: 'hold', weight: w, reps: aim,
-        why: ['Top set hit {0} reps. Same weight, aim for {1} reps next.', set1.r, aim]
-      }, w)
+        why: flat
+          ? ['Top set hit {0} reps ({1} sessions at {2} {3}). Aim for {4} reps, or micro-load if progress feels flat.', set1.r, runLen, w, unit, aim]
+          : ['Top set hit {0} reps. Same weight, aim for {1} reps next.', set1.r, aim]
+      }
     }
-    return withRows({
+    return {
       policy, kind: 'hold', weight: w, reps: bottom,
       why: ['Top set missed {0} reps last time. Same weight again ({1} of {2} to go).', bottom, deloadAt - stalls, deloadAt]
-    }, w)
+    }
   }
 
   if (steady) {

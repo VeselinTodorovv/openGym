@@ -17,7 +17,7 @@ import { isoRun } from './lib/bidi.js'
 import { fmtDate, fmtClock, fmtDateRange, fmtNum, fmtPlate, exerciseNameText, fmtVol, fmtWeight, fmtDur, durPart, todayISO, isoOf, uid, exCount, routineCount, setsWorkCount, DAYN, DAYS, weekOrder, weekStartOf, weekKey, weekDayOffset, MONTHS_LONG, ACCENTS } from './lib/format.js'
 import { fmtSec, lastEntryFor, bestWeightFor, bestWeightForEntry, buildSets, effectiveRoutineIds, workoutDay, workoutVolume, sessionVolume, countsWarmups, setsDone, setsDoneActive, setUnitsTotal, lastBW, sessionSections, setLabel, defaultConfig, pickedExerciseConfig, cleanupSg, modeOf, effortOf, EFFORT, capEffort, stepEffort, isBw, isPerSide, sideReps, workSetsDone, applyIntensifierPlan, MAX_PLANNED_WARMUPS, NOTE_MAX, exLine, barFloor } from './lib/history.js'
 import { usesBar, hasBarOverride, isNoBar, barTypeWeight, ownBarDefault, barPicks, withBarDefault, withStandardBars, defaultBarWeight, BAR_TYPES } from './lib/bar.js'
-import { plateSizesFor, isPlateSize, isStandardPlate, withoutPlateSize, DEFAULT_PAIRS, pairsOf, ownsPlates, withPlatePairs, withStandardPlates, withLoadKind, loadKindFor, baseWeightFor, dropGrid, backoffGrid } from './lib/plates.js'
+import { plateSizesFor, isPlateSize, isStandardPlate, withoutPlateSize, DEFAULT_PAIRS, pairsOf, ownsPlates, withPlatePairs, withStandardPlates, withLoadKind, loadKindFor, baseWeightFor, dropGrid } from './lib/plates.js'
 import { toScale, rirOf, displayScale, EFFORT_PRESETS, effortColor } from './lib/effort.js'
 import { beep, vibrate } from './lib/sound.js'
 import { t, tn, dateLocale, instrFor, instrTranslated, descFor, exerciseNameFor, exerciseNameClass, getLang, useLang } from './lib/i18n.js'
@@ -83,7 +83,7 @@ import { exerciseHistory } from './lib/exercise-history.js'
 import { relativeSeries } from './lib/relative-strength.js'
 import { isBellEx, dbLoadOf, dbLoadFor, withDbLoad, entryDbLoad, currentDbLoad, isOneArm, dumbbellsOf, ownsDumbbells, withDumbbells, ownsNoDumbbells, withNoDumbbells, presetWeights, cleanWeights, canHaveStack, stackOf, withStack, stackFromStep, parseWeightList } from './lib/dumbbells.js'
 import { nextStep } from './lib/weight-step.js'
-import { policyFor, profileRule, defaultIncrement, POLICIES_FOR, POLICY_NAME, POLICY_DESC, MAX_BW_SETS, MAX_TRIPLE_SETS, DENSITY_FLOOR, dupReps, RPT_DEFAULT_PCT, RPT_DEFAULT_MODE, RPT_DEFAULT_MIN_RIR, rptBackoffPctOf, rptBackoffModeOf, rptTopMinRirOf, rptRowWeights } from './lib/progression.js'
+import { policyFor, profileRule, defaultIncrement, POLICIES_FOR, POLICY_NAME, POLICY_DESC, MAX_BW_SETS, MAX_TRIPLE_SETS, DENSITY_FLOOR, dupReps, RPT_DEFAULT_RAMP, RPT_DEFAULT_MIN_RIR, rptRampOf, rptTopMinRirOf } from './lib/progression.js'
 import { normalizeRepRange } from './lib/rep-range.js'
 import { isBackoff, backoffWeights } from './lib/backoff.js'
 import { isPyramid, normalizePyramid, normalizePyramidRest, normalizePyramidWeight, pyramidFromFlat, flatFromPyramid, pyramidLabel, PYRAMID_MAX, MAX_PYRAMID_SETS, PYRAMID_PRESETS } from './lib/pyramid.js'
@@ -2426,19 +2426,13 @@ function ProgressionFields({ st, ex, mode, c, setC, routine, unit, perSide, bw, 
   const preview = backoff && c.weight > 0 && inc > 0
     ? backoffWeights(c.weight, Math.max(1, Math.round(c.sets) || 1), inc).map(fmtNum).join(' → ') + ' ' + unit
     : ''
-  const rptPct = rptBackoffPctOf(c)
-  const rptMode = rptBackoffModeOf(c)
+  const rptRamp = rptRampOf(c)
   const rptMinRir = rptTopMinRirOf(c)
   const effScale = displayScale(st)
   const effOff = effortOf(st) === 'none'
-  const rptRows = active === 'rpt' && mode === 'reps' && !weightless && !assisted && c.weight > 0 && inc > 0
-    ? rptRowWeights(c.weight, Math.max(1, Math.round(c.sets) || 1), c, {
-      grid: backoffGrid(st, { ...c, id: ex.id, inc }),
-      floor: barFloor(st, ex.id),
-      assisted,
-    })
-    : null
-  const rptPreview = rptRows ? rptRows.map(fmtNum).join(' → ') + ' ' + unit : ''
+  const rptPreview = active === 'rpt' && mode === 'reps' && !weightless && !assisted && c.weight > 0 && inc > 0
+    ? `${fmtNum(c.weight)} ${unit}`
+    : ''
   const stride = mode === 'reps' && perSide ? 2 : 1
   const range = climbsRange(active) ? normalizeRepRange(c.reps, c.repsMin, stride) : null
   const epleyEligible = mode === 'reps' && !isBw({ ...c, id: ex.id }) && (active === 'linear' || climbsRange(active))
@@ -2498,19 +2492,13 @@ function ProgressionFields({ st, ex, mode, c, setC, routine, unit, perSide, bw, 
         onChange={v => setC(x => ({ ...x, restMin: v }))} />}
     </div>}
     {active === 'rpt' && mode === 'reps' && !weightless && <>
-      <div className="sect-b" style={{ marginBottom: (effOff && rptMinRir > 0) || rptPreview ? 8 : 18 }}>
-        {!assisted && <SelectRow title={t('Back-off drop')} sheetTitle={t('Back-off drop')} value={String(rptPct)}
-          onChange={v => setC(x => ({ ...x, backoffPct: Number(v) }))}
+      <div className="sect-b" style={{ marginBottom: effOff || rptPreview ? 8 : 18 }}>
+        {!assisted && <SelectRow title={t('Set effort')} sheetTitle={t('Set effort')} value={rptRamp}
+          onChange={v => setC(x => ({ ...x, rptRamp: v }))}
           options={[
-            { value: '5', label: '5%' },
-            { value: '10', label: '10%' },
-            { value: '15', label: '15%' },
-          ]} />}
-        {!assisted && <SelectRow title={t('Back-off sets')} sheetTitle={t('Back-off sets')} value={rptMode}
-          onChange={v => setC(x => ({ ...x, backoffMode: v }))}
-          options={[
-            { value: 'flat', label: t('Same weight after set 1'), subtitle: t('Set 2 drops by {0}%, and any sets after it stay there.', rptPct) },
-            { value: 'step', label: t('Step down each set'), subtitle: t('Each set after the first drops another {0}%.', rptPct) },
+            { value: '8-9-10', label: effScale === 'rpe' ? t('RPE 8 → 9 → 10') : t('2 → 1 → 0 RIR'), subtitle: t('Build effort each set and take the last set to failure.') },
+            { value: '9-9-10', label: effScale === 'rpe' ? t('RPE 9 → 9 → 10') : t('1 → 1 → 0 RIR'), subtitle: t('Keep one rep in reserve, then take the last set to failure.') },
+            { value: '9-9-9', label: effScale === 'rpe' ? t('RPE 9 across sets') : t('1 RIR across sets'), subtitle: t('Keep one rep in reserve on every set.') },
           ]} />}
         <SelectRow title={t('Effort gate')} sheetTitle={t('Effort gate')} value={String(rptMinRir)}
           onChange={v => setC(x => ({ ...x, topMinRir: Number(v) }))}
@@ -2520,11 +2508,11 @@ function ProgressionFields({ st, ex, mode, c, setC, routine, unit, perSide, bw, 
             { value: '2', label: effScale === 'rpe' ? t('RPE 8 or easier') : t('2+ RIR in reserve'), subtitle: t('Leave at least two reps in the tank before adding weight.') },
           ]} />
       </div>
-      {effOff && rptMinRir > 0 && <div className="small dim" style={{ marginBottom: rptPreview ? 8 : 18 }}>
-        {t('Effort tracking is off, so set 1 progresses on reps alone unless you turn RPE or RIR on in Settings.')}
+      {effOff && <div className="small dim" style={{ marginBottom: rptPreview ? 8 : 18 }}>
+        {t('Turn RPE or RIR on in Settings so sets adjust from your effort as well as your reps.')}
       </div>}
       {rptPreview && <div className="small dim" style={{ marginBottom: 18 }}>
-        {t('Sets open at {0}. Set 1 drives progression; back-off sets follow it.', rptPreview)}
+        {t('Sets open at {0} and adjust live from your reps and effort. Set 1 drives progression.', rptPreview)}
       </div>}
     </>}
     {/* What the three undulating days ask for, from the reps above. */}
@@ -2728,12 +2716,10 @@ function ExConfig({ ex, existing, onSave, onDelete, onReplace, close, routine, i
       const restMin = Math.max(15, Math.min(600, Math.round(Number(c.restMin)) || DENSITY_FLOOR))
       if (restMin !== DENSITY_FLOOR) prog.restMin = restMin
     }
-    // Top set & back-offs (`rpt`): drop %, back-off mode, and effort floor, omitted at defaults.
+    // Top set & back-offs (`rpt`): effort ramp and Set-1 effort floor, omitted at defaults.
     if (mode === 'reps' && activePolicy === 'rpt') {
-      const pct = rptBackoffPctOf(c)
-      if (pct !== RPT_DEFAULT_PCT) prog.backoffPct = pct
-      const bMode = rptBackoffModeOf(c)
-      if (bMode !== RPT_DEFAULT_MODE) prog.backoffMode = bMode
+      const ramp = rptRampOf(c)
+      if (ramp !== RPT_DEFAULT_RAMP) prog.rptRamp = ramp
       const minRir = rptTopMinRirOf(c)
       if (minRir !== RPT_DEFAULT_MIN_RIR) prog.topMinRir = minRir
     }

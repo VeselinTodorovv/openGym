@@ -46,12 +46,10 @@ const MAX_PROGRAMME_WEEKS = 16;
 const MAX_WEEK_TARGETS = 24;
 const halfStep = v => Math.round(v * 2) / 2;
 const POLICIES = ['off', 'linear', 'greyskull', 'double', 'steady', 'triple', 'rpt', 'undulating', 'density', 'ladder', 'time'];
-const RPT_PCTS = [5, 10, 15];
-const RPT_MODES = ['flat', 'step'];
+const RPT_RAMPS = ['8-9-10', '9-9-10', '9-9-9'];
 const RPT_MIN_RIRS = [0, 1, 2];
 const rptFields = e => (e.mode === 'cardio' || e.mode === 'time' ? {} : {
-  ...(RPT_PCTS.includes(e.backoffPct) ? { backoffPct: e.backoffPct } : {}),
-  ...(RPT_MODES.includes(e.backoffMode) ? { backoffMode: e.backoffMode } : {}),
+  ...(RPT_RAMPS.includes(e.rptRamp) ? { rptRamp: e.rptRamp } : {}),
   ...(RPT_MIN_RIRS.includes(e.topMinRir) ? { topMinRir: e.topMinRir } : {})
 });
 const MODES = ['reps', 'time', 'cardio'];

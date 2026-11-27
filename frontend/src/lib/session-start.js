@@ -3,10 +3,11 @@
 // to identical entries, or the two paths drift apart the first time a prescription rule changes.
 // Imports both history.js and progression.js (which itself imports history.js); nothing in
 // either imports this file, so there is no cycle.
-import { buildSets, applyIntensifierPlan, modeOf, barFloor, isBw, isPerSide, lastEntryFor, insertWarmupRow, bandClimbReps } from './history.js'
+import { buildSets, applyIntensifierPlan, modeOf, barFloor, isBw, isPerSide, repStep, lastEntryFor, insertWarmupRow, bandClimbReps } from './history.js'
 import { isWarmupRow, isSideSet, syncSideAggregate } from './workout-model.js'
-import { nextPrescription, applyPrescription, defaultIncrement, weightIncrement, plannedOf, deloadTo, DELOAD_FACTOR, sessionsFor, rptBackoffPctOf, rptBackoffModeOf, rptRowWeights } from './progression.js'
-import { dropGrid, backoffGrid } from './plates.js'
+import { nextPrescription, applyPrescription, defaultIncrement, weightIncrement, plannedOf, deloadTo, DELOAD_FACTOR, sessionsFor, rptRampOf } from './progression.js'
+import { normalizeRepRange } from './rep-range.js'
+import { dropGrid } from './plates.js'
 import { backoffStepOf, applyBackoff } from './backoff.js'
 import { dbLoadFor, historyAs, ownedWeightsFor, withMeaning } from './dumbbells.js'
 import { isAssisted } from './exercises.js'
@@ -106,8 +107,7 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
   const meaning = dbLoadFor(stored, cfg)
   const st = historyAs(stored, cfg.id, meaning)
   // `plan` is kept on the entry purely so the workout can explain the number it chose.
-  const rptOpts = modeOf(cfg) === 'reps' ? { grid: backoffGrid(st, cfg), floor: barFloor(st, cfg.id) } : undefined
-  let plan = noProg ? { policy: 'off', kind: 'off' } : nextPrescription(st, cfg, routine, rptOpts)
+  let plan = noProg ? { policy: 'off', kind: 'off' } : nextPrescription(st, cfg, routine)
   // The warm-up ramp and the prescription snap to the exercise's own increment (1.25 kg
   // plates exist), not the unit default; a timed exercise's `inc` is seconds, so it keeps the
   // default for its optional load.
@@ -126,13 +126,9 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
     const lastW = sessionsFor(st, cfg.id, cfg, routine?.id).filter(x => x.mode === 'reps').at(-1)?.weight
     const n = deloadSets(cfg.sets)
     const deloadW = lastW > 0 ? lastW : plan.weight != null && plan.kind !== 'up' ? plan.weight : cfg.weight > 0 ? cfg.weight : undefined
-    const deloadRows = plan.policy === 'rpt' && deloadW > 0 && !(isBw(cfg) && !(cfg.weight > 0) && !(deloadW > 0))
-      ? rptRowWeights(deloadW, n, cfg, { ...(rptOpts || {}), assisted: isAssisted(cfg) })
-      : null
     plan = {
       policy: plan.policy, kind: 'deloadweek', sets: n,
       ...(deloadW != null ? { weight: deloadW } : {}),
-      ...(deloadRows ? { rowWeights: deloadRows } : {}),
       ...(cfg.reps > 0 ? { reps: cfg.reps } : {}),
       why: ['Deload week: {0} of {1} sets, same weight. Lighter on purpose.', n, Math.max(1, cfg.sets || 1)],
       prog: { deload: true },
@@ -143,11 +139,6 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
   const policyKind = plan.kind
   if (slot) {
     plan = programmePlan(st, cfg, plan, slot, step)
-    if (plan.policy === 'rpt' && !(isBw(cfg) && !(cfg.weight > 0) && !(plan.weight > 0))) {
-      const topW = plan.weight ?? (cfg.weight > 0 ? cfg.weight : 0)
-      const rw = topW > 0 ? rptRowWeights(topW, plan.sets ?? cfg.sets, cfg, { ...(rptOpts || {}), assisted: isAssisted(cfg) }) : null
-      if (rw) plan = { ...plan, rowWeights: rw }
-    }
   }
   const planReps = !startsFromLast(st) || plan.kind === 'programme'
   const fromLast = !noProg && policyKind === 'off' && !slot && startsFromLast(st)
@@ -186,12 +177,13 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
   // must not have a later session graded against an old day's aims.
   if (Array.isArray(plan.rowReps)) target.rowReps = plan.rowReps
   else delete target.rowReps
-  // "Top set & back-offs" (`rpt`): `target.weight` and `target.reps` stay the top set's so finish
-  // summaries and Last/Next sheets keep reading Set 1; `rowWeights` carries the derived per-set loads.
+  // "Top set & back-offs" (`rpt`): `target.weight` and `target.reps` stay Set 1's aim while
+  // `target.rpt` carries the effort ramp and rep-range bounds so later sets adjust live on check-off.
   if (Array.isArray(plan.rowWeights)) target.rowWeights = plan.rowWeights
   else delete target.rowWeights
   if (plan.policy === 'rpt' && !(isBw(cfg) && !(cfg.weight > 0) && !(plan.weight > 0))) {
-    target.rpt = { pct: rptBackoffPctOf(cfg), mode: rptBackoffModeOf(cfg) }
+    const range = normalizeRepRange(cfg.reps || 10, cfg.repsMin, repStep(cfg))
+    target.rpt = { ramp: rptRampOf(cfg), repsMin: range.repsMin, reps: range.reps }
   } else delete target.rpt
   // The step the back-off sets were built with, kept on the session so reading it back
   // (progression.js readSession) holds each set to its own weight even after the plan changes.

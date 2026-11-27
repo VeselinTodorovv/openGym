@@ -254,8 +254,7 @@ function cleanEx(e) {
   // Triple progression's set ceiling: `sets` is where its cycle starts, `setsMax` where it ends.
   put('setsMax', e.setsMax);
   if (mode === 'reps') {
-    if ([5, 10, 15].includes(Number(e.backoffPct))) o.backoffPct = Number(e.backoffPct);
-    if (e.backoffMode === 'flat' || e.backoffMode === 'step') o.backoffMode = e.backoffMode;
+    if (e.rptRamp === '8-9-10' || e.rptRamp === '9-9-10' || e.rptRamp === '9-9-9') o.rptRamp = e.rptRamp;
     if (e.topMinRir === 0 || e.topMinRir === 1 || e.topMinRir === 2) o.topMinRir = e.topMinRir;
   }
   // Written out only when they disagree with the catalogue, matching plan-share.js — an

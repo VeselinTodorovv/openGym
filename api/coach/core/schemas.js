@@ -53,7 +53,7 @@ const EX_SCHEMA = {
     min: { type: 'integer' }, speed: { type: 'number' },
     weight: { type: 'number' }, prog: STR, inc: { type: 'number' },
     repsMin: { type: 'integer' }, repsMax: { type: 'integer' }, setsMax: { type: 'integer' },
-    backoffPct: { type: 'integer' }, backoffMode: STR, topMinRir: { type: 'integer' },
+    rptRamp: STR, topMinRir: { type: 'integer' },
     bodyweight: { type: 'boolean' }, side: { type: 'boolean' },
     sg: STR, why: STR, position: { type: 'integer' },
     // A tip to keep in mind while doing it, and up to three library ids to do instead when the

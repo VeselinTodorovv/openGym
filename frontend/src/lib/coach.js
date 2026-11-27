@@ -501,8 +501,7 @@ const CHANGE_APPLY = {
     if (Number.isInteger(a.repsMin)) e.repsMin = a.repsMin
     if (Number.isInteger(a.repsMax)) e.repsMax = a.repsMax
     if (Number.isInteger(a.setsMax)) e.setsMax = a.setsMax   // triple progression's set ceiling
-    if ([5, 10, 15].includes(a.backoffPct)) e.backoffPct = a.backoffPct
-    if (a.backoffMode === 'flat' || a.backoffMode === 'step') e.backoffMode = a.backoffMode
+    if (['8-9-10', '9-9-10', '9-9-9'].includes(a.rptRamp)) e.rptRamp = a.rptRamp
     if ([0, 1, 2].includes(a.topMinRir)) e.topMinRir = a.topMinRir
     // Only when the Coach disagreed with the catalogue: an absent flag has always meant
     // "whatever the exercise says", and writing one out would freeze today's dataset into
@@ -589,8 +588,7 @@ const CHANGE_APPLY = {
         ...(Number.isInteger(e.repsMax) ? { repsMax: e.repsMax } : {}),
         ...(Number.isInteger(e.setsMax) ? { setsMax: e.setsMax } : {}),
         ...(POLICIES.includes(e.prog) ? { prog: e.prog } : {}),
-        ...([5, 10, 15].includes(e.backoffPct) ? { backoffPct: e.backoffPct } : {}),
-        ...(e.backoffMode === 'flat' || e.backoffMode === 'step' ? { backoffMode: e.backoffMode } : {}),
+        ...(['8-9-10', '9-9-10', '9-9-9'].includes(e.rptRamp) ? { rptRamp: e.rptRamp } : {}),
         ...([0, 1, 2].includes(e.topMinRir) ? { topMinRir: e.topMinRir } : {}),
         ...(e.bodyweight != null ? { bodyweight: !!e.bodyweight } : {}),
         ...(e.side ? { side: true } : {})

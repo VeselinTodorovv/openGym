@@ -1059,13 +1059,13 @@ describe('preview_session', () => {
     expect(e.planned.summary).toBe('3–5 × 8–12 · 50 kg')
   })
 
-  test('top set & back-offs (`rpt`) previews per-set row_weights on session 1 and after Set 1 levels up', () => {
+  test('top set & back-offs (`rpt`) previews Set 1 progression on session 1 and after Set 1 levels up', () => {
     only({ id: '0025', sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt' }, { prog: 'rpt' })
     const first = call('preview_session').exercises[0]
     expect(first.policy).toBe('rpt')
     expect(first.policy_name).toBe('Top set & back-offs')
-    expect(first.prescription).toMatchObject({ kind: 'first', weight: 80, reps: 7, row_weights: [80, 72.5, 72.5] })
-    expect(first.opening_sets.map(s => [s.w, s.r])).toEqual([[80, 7], [72.5, 7], [72.5, 7]])
+    expect(first.prescription).toMatchObject({ kind: 'first', weight: 80, reps: 7 })
+    expect(first.opening_sets.map(s => [s.w, s.r])).toEqual([[80, 7], [80, 7], [80, 7]])
 
     only({ id: '0025', sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt' }, {
       prog: 'rpt',
@@ -1073,14 +1073,14 @@ describe('preview_session', () => {
         id: 'w-rpt', d: '2026-07-20', routineId: 'r-preview', name: 'Preview',
         entries: [{
           id: '0025',
-          target: { id: '0025', sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt', rpt: { pct: 10, mode: 'flat' }, rowWeights: [80, 72.5, 72.5] },
-          sets: [{ w: 80, r: 10, rpe: 8, done: true }, { w: 72.5, r: 6, done: true }, { w: 72.5, r: 5, done: false }]
+          target: { id: '0025', sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt', rpt: { ramp: '8-9-10', repsMin: 7, reps: 10 } },
+          sets: [{ w: 80, r: 10, rpe: 8, done: true }, { w: 72.5, r: 8, rpe: 9, done: true }, { w: 72.5, r: 7, done: false }]
         }]
       }]
     })
     const up = call('preview_session').exercises[0]
-    expect(up.prescription).toMatchObject({ kind: 'up', weight: 82.5, reps: 7, row_weights: [82.5, 75, 75] })
-    expect(up.opening_sets.map(s => [s.w, s.r])).toEqual([[82.5, 7], [75, 7], [75, 7]])
+    expect(up.prescription).toMatchObject({ kind: 'up', weight: 82.5, reps: 7 })
+    expect(up.opening_sets.map(s => [s.w, s.r])).toEqual([[82.5, 7], [82.5, 7], [82.5, 7]])
   })
 
   test('defaults to the routine scheduled for today', () => {

@@ -50,6 +50,8 @@ import LiveCard from '../components/LiveCard.jsx'
 import Icon from '../components/Icon.jsx'
 import { Button, Check, NumberField } from '../components/ui.jsx'
 import { defaultIncrement, weightIncrement, stepWeight } from '../lib/progression.js'
+import { rptRampOf, rptTargetRirs, applyReactiveRpt } from '../lib/backoff.js'
+import { normalizeRepRange } from '../lib/rep-range.js'
 import { progressionGuidance } from '../lib/progression-copy.js'
 import { rpeAs } from '../lib/programmes.js'
 import { buildPlannedEntry, buildSessionEntry, plannedConfigOf, builtOutOfProgression } from '../lib/session-start.js'
@@ -148,19 +150,28 @@ function rerampOpen(s, e, i) {
   e.sets = liveReramp(e.sets, dropGrid(V, cfg), barFloor(V, e.id), isAssisted(cfg))
 }
 
-function cascadeSpecFor(s, e) {
+function cascadeSpecFor(_s, e) {
   const cfg = { ...(e?.target || {}), id: e?.id }
   if (modeOf(cfg) !== 'reps') return 0
-  if (e?.target?.rpt && !isAssisted(cfg)) {
-    const V = gymStateFor(s, e.id)
-    return {
-      pct: e.target.rpt.pct,
-      mode: e.target.rpt.mode,
-      grid: backoffGrid(V, cfg),
-      floor: barFloor(V, e.id),
-    }
-  }
   return e?.target?.backoffStep || 0
+}
+
+function rptSpecFor(s, e) {
+  const cfg = { ...(e?.target || {}), id: e?.id }
+  if (modeOf(cfg) !== 'reps' || !e?.target?.rpt || isAssisted(cfg)) return null
+  const V = gymStateFor(s, e.id)
+  const range = normalizeRepRange(
+    e.target.rpt.reps || e.planned?.reps || cfg.reps || 10,
+    e.target.rpt.repsMin ?? e.planned?.repsMin ?? cfg.repsMin,
+    repStep(cfg)
+  )
+  return {
+    ramp: rptRampOf({ rptRamp: e.target.rpt.ramp ?? cfg.rptRamp }),
+    repsMin: range.repsMin,
+    reps: range.reps,
+    grid: backoffGrid(V, cfg),
+    floor: barFloor(V, e.id),
+  }
 }
 
 // A set-row column's number as it is shown. Most columns show what is stored; one with a `view`
@@ -243,6 +254,12 @@ function ExerciseBlock({ entryIdx, compact, listed, dense, editing, onToggle, on
     const [start, count] = setSpanAt(e.sets, i)
     const on = !isFailureSet(e.sets[i])
     for (let j = start; j < start + count; j++) if (isFailureSet(e.sets[j]) !== on) e.sets[j] = toggleFailure(e.sets[j])
+    if (!editing && e.sets[i]?.done) {
+      inEntryUnit(s, entryIdx, en => {
+        const spec = rptSpecFor(s, en)
+        if (spec) en.sets = applyReactiveRpt(en.sets, i, spec)
+      })
+    }
   }, true)
   // One set's own rest for this session (#609): null takes it away, 0 is "No timer". It sits on
   // the set's first row, the one the rest flow reads (ownSetRest). The wheel may outlive the
@@ -304,13 +321,18 @@ function ExerciseBlock({ entryIdx, compact, listed, dense, editing, onToggle, on
   // stays right. The done tick goes through onToggleSide → toggle() instead, so ticking a side
   // still fires the rest timer / auto-advance / workout-complete flow.
   const setSide = (i, side, field, v) => {
-    if (field !== 'w') return mutSet(i, row => markWarmupEdited(setSideField(row, side, field, v), field))
     update(s => inEntryUnit(s, entryIdx, e => {
       const row = setSideField(e.sets[i], side, field, v)
-      row.sides[side].weightOrigin = WEIGHT_ORIGIN_MANUAL
+      if (field === 'w') row.sides[side].weightOrigin = WEIGHT_ORIGIN_MANUAL
       e.sets[i] = markWarmupEdited(row, field)
-      e.sets = cascadeWeight(e.sets, i, v, side, cascadeSpecFor(s, e))
-      rerampOpen(s, e, i)
+      if (field === 'w') {
+        e.sets = cascadeWeight(e.sets, i, v, side, cascadeSpecFor(s, e))
+        rerampOpen(s, e, i)
+      }
+      if (!editing && e.sets[i]?.sides?.[side]?.done && (field === 'w' || field === 'r' || field === 'rpe' || field === 'rir')) {
+        const spec = rptSpecFor(s, e)
+        if (spec) e.sets = applyReactiveRpt(e.sets, i, spec, side)
+      }
     }), true)
   }
   // Drop/burst edits accept an optional `side` ('L'|'R'): present for a per-side row (edits that
@@ -792,6 +814,17 @@ function ExerciseBlock({ entryIdx, compact, listed, dense, editing, onToggle, on
   // rating or change one. rirOf-via-effortColor keeps the colour identical whether the value
   // is logged as RIR or RPE. With the +/- buttons switched off (Workout controls) a logged
   // rating is just the tinted value, which still opens the picker.
+  const rptHintAt = (i, effKind) => {
+    if (!entry?.target?.rpt || isWarmupRow(entry.sets[i]) || isAssisted({ ...(entry.target || {}), id: entry.id })) return null
+    const workIndices = []
+    entry.sets.forEach((x, idx) => { if (!isWarmupRow(x)) workIndices.push(idx) })
+    const pos = workIndices.indexOf(i)
+    if (pos < 0) return null
+    const targetRir = rptTargetRirs(workIndices.length, entry.target.rpt.ramp)[pos]
+    if (targetRir == null) return null
+    const val = effKind === 'rpe' ? 10 - targetRir : targetRir
+    return `~${fmtNum(val)}`
+  }
   const effortCell = (s, i, col) => {
     const v = s[col.f] ?? null
     const rir = col.eff === 'rpe' ? (v == null ? null : 10 - v) : v
@@ -809,7 +842,7 @@ function ExerciseBlock({ entryIdx, compact, listed, dense, editing, onToggle, on
     }
     const open = () => effortPickerSheet(col.eff, v, pickEffort)
     if (v == null) return (
-      <button className="effcell is-empty" aria-label={inSet(s, i, col.hd)} onClick={open}>{col.hd}</button>
+      <button className="effcell is-empty" aria-label={inSet(s, i, col.hd)} onClick={open}>{rptHintAt(i, col.eff) || col.hd}</button>
     )
     const step = dir => onField(i, col.f, stepEffort(col.eff, v, dir))
     return (
@@ -851,7 +884,7 @@ function ExerciseBlock({ entryIdx, compact, listed, dense, editing, onToggle, on
       const fresh = useStore.getState().S.active?.entries[entryIdx]?.sets[i]?.sides?.[side]
       if (nv != null && fresh && !fresh.done) onToggleSide(i, side)
     })
-    if (v == null) return <button className="effcell is-empty" aria-label={inSet(s, i, col.hd, side)} onClick={open}>{col.hd}</button>
+    if (v == null) return <button className="effcell is-empty" aria-label={inSet(s, i, col.hd, side)} onClick={open}>{rptHintAt(i, col.eff) || col.hd}</button>
     const step = dir => setSide(i, side, col.f, stepEffort(col.eff, v, dir))
     return (
       <div className={'stp effcell-stp' + (wc.steppers ? '' : ' plain')}
@@ -1603,10 +1636,10 @@ function ActiveWorkout() {
 
   // An exercise with a unit of its own (#657) is changed in that unit, as it is shown and typed:
   // a weight from its row, a cascade, an added set or warm-up, the watch's numbers.
-  const mutEntry = (idx, fn) => update(s => { inEntryUnit(s, idx, fn) }, true)
+  const mutEntry = (idx, fn) => update(s => { inEntryUnit(s, idx, e => fn(e, s)) }, true)
   // Clearing an optional field drops the key rather than storing null, so a set only carries
   // what was actually logged — in the session, in history and in a backup.
-  const setField = (idx, i, field, v) => mutEntry(idx, e => {
+  const setField = (idx, i, field, v) => mutEntry(idx, (e, curS) => {
     if (v == null) delete e.sets[i][field]; else e.sets[i][field] = v
     // Typing a duration IS the new plan, the same way ticking the row ends it: a plan a displaced
     // hold put aside must not outrank what you just typed, or the field would read 45 and the ▶
@@ -1618,10 +1651,13 @@ function ActiveWorkout() {
     // carries through without retyping every row while explicit manual exceptions stay put. A
     // warm-up edit stays on its own row, and the later rungs keep their ramp loads.
     if (field === 'w') {
-      const curS = useStore.getState().S
       e.sets[i].weightOrigin = WEIGHT_ORIGIN_MANUAL
       e.sets = cascadeWeight(e.sets, i, v, undefined, cascadeSpecFor(curS, e))
       rerampOpen(curS, e, i)
+    }
+    if (!editing && e.sets[i]?.done && (field === 'w' || field === 'r' || field === 'rpe' || field === 'rir')) {
+      const spec = rptSpecFor(curS, e)
+      if (spec) e.sets = applyReactiveRpt(e.sets, i, spec)
     }
     // A warm-up you changed is yours from now on ("Your last session" carries it, #525).
     e.sets[i] = markWarmupEdited(e.sets[i], field)
@@ -2254,14 +2290,21 @@ function ActiveWorkout() {
     const cardioEntry = m === 'cardio'
     let exJustDone = false, workoutDone = false, checked = false
     update(s => {
-      const e = s.active.entries[idx]
+      let e = s.active.entries[idx]
       // A per-side tick flips just that side; the row's own `done` (both sides) is then
       // recomputed by toggleSide, so every completion check below still reads a single boolean.
       if (side) e.sets[i] = toggleSide(e.sets[i], side)
       else e.sets[i].done = !e.sets[i].done
       checked = e.sets[i].done
       // When the work happened, for the session's end (lib/finish-workout.js sessionEnd).
-      if (!editing && (side ? e.sets[i].sides[side].done : checked)) e.sets[i].at = Date.now()
+      if (!editing && (side ? e.sets[i].sides[side].done : checked)) {
+        e.sets[i].at = Date.now()
+        inEntryUnit(s, idx, en => {
+          const spec = rptSpecFor(s, en)
+          if (spec) en.sets = applyReactiveRpt(en.sets, i, spec, side)
+        })
+        e = s.active.entries[idx]
+      }
       // A finished row has no use for a plan set aside by a hold that did not finish.
       if (checked && e.sets[i].planSec != null) delete e.sets[i].planSec
       if (e.sets[i].done && !editing) {

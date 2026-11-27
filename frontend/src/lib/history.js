@@ -10,7 +10,7 @@ import { hasIncline, inclineFrom, hasLevel, levelFrom } from './incline.js'
 import { isCardio, isHold, isDistanceEx, isOneLimb, isBodyweightEq, isAssisted, betterWeight, exerciseOf } from './exercises.js'
 import { barWeightFor } from './bar.js'
 import { phaseForSet, modeForSet, modeForEntry, isWarmupRow, isFailureSet, isDropSet, isRestPauseSet, normalizeMode, completedVolumeOf, hasCompletedWork, nextDropWeight, splitBurstReps, splitClusterReps, makeSideSet, isSideSet, syncSideAggregate, WEIGHT_ORIGIN_MANUAL, dropsOf, clustersOf } from './workout-model.js'
-import { backoffAt, backoffStepOf, backoffWeights, rptWeightsFrom } from './backoff.js'
+import { backoffAt, backoffStepOf, backoffWeights } from './backoff.js'
 import { dbLoadOf, bellsIn, volumeFactor, historyAs, ownedFloor } from './dumbbells.js'
 import { isRungRow, rungWeight } from './warmup-snap.js'
 import { bodyLoadOf, bodyweightFor, countsBodyweight } from './bw-load.js'
@@ -1135,51 +1135,21 @@ export { streakWeeks } from './streak.js'
  * rung its own load, so editing one rung leaves the rungs after it where they were (setting
  * warm-up 1 of a 60/90/105 ramp to 65 used to turn it into 65/65/65).
  *
- * `backoff` is either `backoffStep` (a positive number, lib/backoff.js) or an RPT spec
- * `{ pct, mode, grid, floor }` ("Top set & back-offs"): editing Set 1 recalculates subsequent open
- * work sets onto the nearest equipment grid; editing a back-off set in `'step'` mode steps
- * trailing open back-offs down by `(workIdx - fromWorkIdx) * pct` relative to the edited load.
+ * `backoff` is `backoffStep` (a positive number, lib/backoff.js): editing Set 1 steps trailing
+ * open sets down by `backoff` each; under `rpt`, sets open flat at the top weight and adjust
+ * reactively as sets are completed (`applyReactiveRpt`).
  */
 export function cascadeWeight(rows, from, value, side, backoff = 0) {
   const source = rows[from]
   if (!source || isWarmupRow(source)) return rows.slice()
   const sides = isSideSet(source) ? (side ? [side] : ['L', 'R']) : null
   const next = rows.slice()
-  const rpt = backoff && typeof backoff === 'object' ? backoff : null
-  const stepDown = !rpt && backoff > 0 && value != null
-  let fromWorkIdx = -1
-  let totalWork = 0
-  if (rpt) {
-    for (let idx = 0; idx < next.length; idx++) {
-      if (isWarmupRow(next[idx])) continue
-      if (idx === from) fromWorkIdx = totalWork
-      totalWork++
-    }
-  }
-  const numVal = value == null ? null : (Number(value) || 0)
-  const rptSeq = rpt && numVal > 0 && fromWorkIdx >= 0
-    ? (rpt.mode === 'step'
-      ? rptWeightsFrom(numVal, Math.max(1, totalWork - fromWorkIdx), {
-        pct: rpt.pct, mode: 'step', grid: rpt.grid, floor: rpt.floor,
-      })
-      : fromWorkIdx === 0
-        ? rptWeightsFrom(numVal, Math.max(1, totalWork), {
-          pct: rpt.pct, mode: 'flat', grid: rpt.grid, floor: rpt.floor,
-        })
-        : null)
-    : null
+  const stepDown = backoff > 0 && value != null
   let k = 0
-  const targetWeightAt = () => {
-    if (rpt && numVal > 0) {
-      if (rptSeq) return rptSeq[Math.min(k, rptSeq.length - 1)]
-      return numVal
-    }
-    return stepDown ? backoffAt(value, k, backoff) : value
-  }
   const setWeight = row => {
     const out = { ...row }
     if (value == null) delete out.w
-    else out.w = targetWeightAt()
+    else out.w = stepDown ? backoffAt(value, k, backoff) : value
     return out
   }
   const setSideWeight = (row, key) => {

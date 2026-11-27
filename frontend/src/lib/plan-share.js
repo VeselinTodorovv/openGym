@@ -19,7 +19,7 @@ import { deriveSessionName } from './session-merge.js'
 import { isPyramid, normalizePyramid, normalizePyramidRest, normalizePyramidWeight } from './pyramid.js'
 import { isBackoff } from './backoff.js'
 import { dbLoadOf } from './dumbbells.js'
-import { MAX_TRIPLE_SETS, RPT_PCTS, RPT_DEFAULT_PCT, RPT_DEFAULT_MODE, RPT_MIN_RIRS, RPT_DEFAULT_MIN_RIR, rptBackoffModeOf, rptTopMinRirOf } from './progression.js'
+import { MAX_TRIPLE_SETS, RPT_RAMPS, RPT_DEFAULT_RAMP, RPT_MIN_RIRS, RPT_DEFAULT_MIN_RIR, rptRampOf, rptTopMinRirOf } from './progression.js'
 import { uid, todayISO, DAYN, weekOrder, weekStartOf, exCount, routineCount } from './format.js'
 import { t, exerciseNameFor, exerciseNameClass } from './i18n-core.js'
 import { convertStep, convertWeight } from './units.js'
@@ -142,10 +142,7 @@ function cleanEx(e) {
   // Shorter rests' floor (progression.js densityRestOf), rep work only.
   if (mode === 'reps' && e.restMin > 0) o.restMin = Math.round(e.restMin)
   // "Top set & back-offs" (`rpt`) settings; defaults omitted so files stay compact.
-  if (mode === 'reps' && e.backoffPct != null && RPT_PCTS.includes(Number(e.backoffPct)) && Number(e.backoffPct) !== RPT_DEFAULT_PCT) {
-    o.backoffPct = Number(e.backoffPct)
-  }
-  if (mode === 'reps' && rptBackoffModeOf(e) !== RPT_DEFAULT_MODE) o.backoffMode = 'step'
+  if (mode === 'reps' && rptRampOf(e) !== RPT_DEFAULT_RAMP) o.rptRamp = rptRampOf(e)
   if (mode === 'reps' && e.topMinRir != null && rptTopMinRirOf(e) !== RPT_DEFAULT_MIN_RIR) {
     o.topMinRir = rptTopMinRirOf(e)
   }
@@ -362,13 +359,12 @@ export function parsePlan(raw, destinationUnit = 'kg') {
       const pyramidRest = pyramid.length ? normalizePyramidRest(e.pyramidRest, pyramid.length) : []
       const pyramidWeight = pyramid.length ? normalizePyramidWeight(e.pyramidWeight, pyramid.length) : []
       const warmChoice = cleanWarmupChoice(e)
-      const backoffPct = RPT_PCTS.includes(Number(e.backoffPct)) ? Number(e.backoffPct) : null
-      const backoffMode = e.backoffMode === 'step' ? 'step' : e.backoffMode === 'flat' ? 'flat' : null
+      const rptRamp = RPT_RAMPS.includes(e.rptRamp) ? e.rptRamp : null
       const topMinRir = e.topMinRir === 0 || e.topMinRir === '0' || e.topMinRir === 'off' || e.topMinRir === false ? 0
         : RPT_MIN_RIRS.includes(Number(e.topMinRir)) ? Number(e.topMinRir) : null
-      const { warmupSets, warmup: _warmup, warmupRows: _warmupRows, intensifier, restSec, restOff: _restOff, warmupRestSec, warmupRestOff: _warmOff, sideRestSec: _sideRest, sideRestOff: _sideOff, subs: _subs, subCfg: _subCfg, pyramid: _pyramid, pyramidRest: _pyramidRest, pyramidWeight: _pyramidWeight, sgName: _sgName, sgRest: _sgRest, sgCircuit: _sgCircuit, incline: _incline, level: _level, tempo: _tempo, backoffPct: _backoffPct, backoffMode: _backoffMode, topMinRir: _topMinRir, ...passthrough } = e
+      const { warmupSets, warmup: _warmup, warmupRows: _warmupRows, intensifier, restSec, restOff: _restOff, warmupRestSec, warmupRestOff: _warmOff, sideRestSec: _sideRest, sideRestOff: _sideOff, subs: _subs, subCfg: _subCfg, pyramid: _pyramid, pyramidRest: _pyramidRest, pyramidWeight: _pyramidWeight, sgName: _sgName, sgRest: _sgRest, sgCircuit: _sgCircuit, incline: _incline, level: _level, tempo: _tempo, rptRamp: _rptRamp, backoffPct: _backoffPct, backoffMode: _backoffMode, topMinRir: _topMinRir, ...passthrough } = e
       if (!known.has(passthrough.id)) passthrough.id = canonicalExId(passthrough.id)
-      return convertedExercise({ ...passthrough, ...(pyramid.length ? { pyramid } : {}), ...(pyramidRest.length ? { pyramidRest } : {}), ...(pyramidWeight.length ? { pyramidWeight } : {}), ...(backoffPct != null && backoffPct !== RPT_DEFAULT_PCT ? { backoffPct } : {}), ...(backoffMode === 'step' ? { backoffMode } : {}), ...(topMinRir != null && topMinRir !== RPT_DEFAULT_MIN_RIR ? { topMinRir } : {}), ...(warm ? { warmupSets: warm } : {}), ...warmChoice, ...(intens ? { intensifier: intens } : {}), ...(rest ? { restSec: rest } : restOff ? { restOff: true } : {}), ...(warmOff ? { warmupRestOff: true } : warmRest ? { warmupRestSec: warmRest } : {}), ...(sideOff ? { sideRestOff: true } : sideRest ? { sideRestSec: sideRest } : {}), ...(subs.length ? { subs } : {}), ...(sgName ? { sgName } : {}), ...(sgRest ? { sgRest } : {}), ...(sgCircuit ? { sgCircuit } : {}), ...(incline > 0 ? { incline } : {}), ...(level > 0 ? { level } : {}), ...(normalizeTempo(_tempo) ? { tempo: normalizeTempo(_tempo) } : {}) }, sourceUnit || destination, destination)
+      return convertedExercise({ ...passthrough, ...(pyramid.length ? { pyramid } : {}), ...(pyramidRest.length ? { pyramidRest } : {}), ...(pyramidWeight.length ? { pyramidWeight } : {}), ...(rptRamp && rptRamp !== RPT_DEFAULT_RAMP ? { rptRamp } : {}), ...(topMinRir != null && topMinRir !== RPT_DEFAULT_MIN_RIR ? { topMinRir } : {}), ...(warm ? { warmupSets: warm } : {}), ...warmChoice, ...(intens ? { intensifier: intens } : {}), ...(rest ? { restSec: rest } : restOff ? { restOff: true } : {}), ...(warmOff ? { warmupRestOff: true } : warmRest ? { warmupRestSec: warmRest } : {}), ...(sideOff ? { sideRestOff: true } : sideRest ? { sideRestSec: sideRest } : {}), ...(subs.length ? { subs } : {}), ...(sgName ? { sgName } : {}), ...(sgRest ? { sgRest } : {}), ...(sgCircuit ? { sgCircuit } : {}), ...(incline > 0 ? { incline } : {}), ...(level > 0 ? { level } : {}), ...(normalizeTempo(_tempo) ? { tempo: normalizeTempo(_tempo) } : {}) }, sourceUnit || destination, destination)
     })
   }))
   // Exercise units (#657): only kg or lb, and only for exercises the plan still holds.

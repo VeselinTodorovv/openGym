@@ -9,7 +9,7 @@
 // reads every planned set: one back-off set short of its reps holds the whole sequence.
 //
 // Imports nothing from history.js or progression.js — both import this module.
-import { isWarmupRow, isSideSet, syncSideAggregate } from './workout-model.js'
+import { isWarmupRow, isSideSet, isFailureSet, syncSideAggregate } from './workout-model.js'
 import { defaultIncrement, isAssisted } from './exercises.js'
 import { ownedDown } from './dumbbells.js'
 
@@ -134,26 +134,127 @@ export function snapBackoff(raw, prev, grid = 2.5, floor = 0) {
   return roundToStep(Math.max(minW, Math.min(p, w)), step)
 }
 
+export const RPT_RAMPS = ['8-9-10', '9-9-10', '9-9-9']
+export const RPT_DEFAULT_RAMP = '8-9-10'
+
+export function rptRampOf(cfg) {
+  return RPT_RAMPS.includes(cfg?.rptRamp) ? cfg.rptRamp : RPT_DEFAULT_RAMP
+}
+
 /**
- * Per-set weights for "Top set & back-offs" (`rpt`): Set 1 at `top`, Sets 2+ dropped by `pct`%
- * in `'flat'` mode (all back-offs equal to Set 2) or `'step'` mode (`k * pct`%, capped at 90%,
- * each snapped under the set before it).
+ * Planned effort per work set in internal RIR (RPE 8 = 2, RPE 9 = 1, RPE 10 = 0), scaled to `count` sets:
+ *   - '8-9-10': [2, 1, ..., 1, 0]  (2 sets -> [2, 0]; 1 set -> [2])
+ *   - '9-9-10': [1, 1, ..., 1, 0]  (1 set -> [1])
+ *   - '9-9-9':  [1, 1, ..., 1]
  */
-export function rptWeightsFrom(top, count, { pct = 10, mode = 'flat', grid = 2.5, floor = 0 } = {}) {
+export function rptTargetRirs(count, ramp = RPT_DEFAULT_RAMP) {
   const n = Math.max(0, Math.round(Number(count)) || 0)
-  const t = Number(top) || 0
   if (n === 0) return []
-  if (!(t > 0)) return Array(n).fill(0)
-  if (n === 1) return [t]
-  const drop = Number(pct) > 0 ? Number(pct) : 10
-  if (mode === 'step') {
-    const out = [t]
-    for (let k = 1; k < n; k++) {
-      const totalPct = Math.min(90, k * drop)
-      out.push(snapBackoff(t * (1 - totalPct / 100), out[k - 1], grid, floor))
-    }
-    return out
+  const mode = RPT_RAMPS.includes(ramp) ? ramp : RPT_DEFAULT_RAMP
+  if (mode === '9-9-9') return Array(n).fill(1)
+  if (mode === '9-9-10') return n === 1 ? [1] : [...Array(n - 1).fill(1), 0]
+  if (n === 1) return [2]
+  if (n === 2) return [2, 0]
+  return [2, ...Array(n - 2).fill(1), 0]
+}
+
+const setRirOf = s =>
+  !s ? null : s.rir != null ? Number(s.rir) : s.rpe != null ? 10 - Number(s.rpe) : isFailureSet(s) ? 0 : null
+
+/**
+ * Compute the working weight for the next set from a completed set's load, reps, and effort.
+ *
+ * Keeps `w` unchanged whenever predicted reps at `nextRir` (accounting for acute inter-set fatigue
+ * and the effort headroom between `loggedRir` and `nextRir`) remain safely above `repsMin`. When
+ * staying at `w` would land on or below `repsMin`, drops onto `grid` via `snapBackoff` to bring the
+ * next set back into the middle of `[repsMin, repsMax]` at `nextRir`. Never raises above `w`.
+ */
+export function reactiveNextWeight(
+  { w, r, rir } = {},
+  { currentRir = 2, nextRir = 1, repsMin = 6, repsMax = 10, grid = 2.5, floor = 0 } = {}
+) {
+  const weight = Number(w) || 0
+  const reps = Number(r) || 0
+  if (!(weight > 0) || !(reps > 0)) return weight
+  const minR = Math.max(1, Number(repsMin) || 6)
+  const maxR = Math.max(minR, Number(repsMax) || minR)
+  const loggedRir = rir != null && Number.isFinite(Number(rir))
+    ? Math.max(0, Number(rir))
+    : Math.max(0, Number(currentRir) || 0)
+  const targetRir = Math.max(0, Number(nextRir) || 0)
+  const fatigueReps = loggedRir <= 0.5 ? 2.0 : loggedRir <= 1 ? 1.4 : 1.0
+  const predictedReps = reps + (loggedRir - targetRir) - fatigueReps
+  const span = maxR - minR
+  const cushion = span <= 0 ? 0 : Math.min(0.6, Math.max(0.25, span * 0.5))
+  if (predictedReps >= minR + cushion - 1e-9) return weight
+
+  const nextFailReps = Math.max(1, reps + loggedRir - fatigueReps)
+  const e1rmNext = weight * (1 + nextFailReps / 30)
+  const aimReps = span > 0 ? Math.min(maxR, Math.max(minR + Math.min(1, span), (minR + maxR) / 2)) : minR
+  const raw = Math.max(weight * 0.65, e1rmNext / (1 + (aimReps + targetRir) / 30))
+  return snapBackoff(raw, weight, grid, floor)
+}
+
+/**
+ * Adjust open, non-manual work sets after completed work row `fromIdx` using `reactiveNextWeight`.
+ * Stops propagating if a later work row is already `done` (that completed row owns anything below it).
+ */
+export function applyReactiveRpt(rows, fromIdx, spec, side) {
+  if (!Array.isArray(rows) || !spec) return rows
+  const source = rows[fromIdx]
+  if (!source || isWarmupRow(source)) return rows
+  const workIndices = []
+  for (let i = 0; i < rows.length; i++) {
+    if (!isWarmupRow(rows[i])) workIndices.push(i)
   }
-  const w2 = snapBackoff(t * (1 - drop / 100), t, grid, floor)
-  return [t, ...Array(n - 1).fill(w2)]
+  const pos = workIndices.indexOf(fromIdx)
+  if (pos < 0 || pos >= workIndices.length - 1) return rows
+  const rirs = rptTargetRirs(workIndices.length, spec.ramp)
+  const currentRir = rirs[pos]
+  const nextRir = rirs[pos + 1]
+  const next = rows.slice()
+
+  if (isSideSet(source)) {
+    const limbs = side ? [side] : ['L', 'R']
+    const minR = Math.max(1, (Number(spec.repsMin) || 12) / 2)
+    const maxR = Math.max(minR, (Number(spec.reps) || minR * 2) / 2)
+    for (const key of limbs) {
+      const srcSide = source.sides?.[key]
+      if (!srcSide || !srcSide.done || !(Number(srcSide.w) > 0)) continue
+      const nextW = reactiveNextWeight(
+        { w: srcSide.w, r: srcSide.r, rir: setRirOf(srcSide) },
+        { currentRir, nextRir, repsMin: minR, repsMax: maxR, grid: spec.grid, floor: spec.floor }
+      )
+      for (let p = pos + 1; p < workIndices.length; p++) {
+        const idx = workIndices[p]
+        const row = next[idx]
+        if (!isSideSet(row)) continue
+        const curSide = row.sides?.[key]
+        if (!curSide || curSide.done) break
+        if (curSide.weightOrigin === 'manual') continue
+        next[idx] = syncSideAggregate({
+          ...row,
+          sides: { ...row.sides, [key]: { ...curSide, w: nextW } },
+        })
+      }
+    }
+    return next
+  }
+
+  if (!source.done || !(Number(source.w) > 0)) return rows
+  const minR = Math.max(1, Number(spec.repsMin) || 6)
+  const maxR = Math.max(minR, Number(spec.reps) || minR)
+  const nextW = reactiveNextWeight(
+    { w: source.w, r: source.r, rir: setRirOf(source) },
+    { currentRir, nextRir, repsMin: minR, repsMax: maxR, grid: spec.grid, floor: spec.floor }
+  )
+  for (let p = pos + 1; p < workIndices.length; p++) {
+    const idx = workIndices[p]
+    const row = next[idx]
+    if (isSideSet(row)) continue
+    if (row.done) break
+    if (row.weightOrigin === 'manual') continue
+    next[idx] = { ...row, w: nextW }
+  }
+  return next
 }
