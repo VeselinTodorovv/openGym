@@ -435,6 +435,21 @@ describe('Downstream ecosystem contracts (finishCompare, plan-share, units, sess
     expect(copied.ex[0].reps).toBe(10)
     expect(copied.ex[0].repsMin).toBe(7)
   })
+
+  it('keeps lighter back-off weights on scheduled deload weeks instead of flattening Set 2 to the top weight', () => {
+    const r = rig({ id: BENCH, sets: 3, reps: 10, repsMin: 7, weight: 80, prog: 'rpt' })
+    r.train((s, k) => (k === 0 ? { r: 8, rpe: 8 } : { r: 8 }))
+    // Deload week scheduled on the active session's week ('2026-04-06' is Monday)
+    r.st = {
+      ...r.st,
+      deloadCycle: { extra: ['2026-04-06'] },
+      active: { id: 'dw1', d: '2026-04-06' },
+    }
+    const deloadEntry = r.open()
+    expect(deloadEntry.plan.kind).toBe('deloadweek')
+    expect(work(deloadEntry.sets).map(s => s.w)).toEqual([80, 72.5])
+    expect(deloadEntry.target.rowWeights).toEqual([80, 72.5])
+  })
 })
 
 describe('Live workout cascadeWeight for RPT', () => {

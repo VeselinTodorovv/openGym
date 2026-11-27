@@ -510,9 +510,11 @@ export function stallCount(sessions, policy, cfg) {
     if (sessions[i].ok) break
     if (policy === 'rpt' && cfg) {
       const range = normalizeRepRange(cfg.reps || sessions[i].goal || 10, cfg.repsMin, repStep(cfg))
-      if (sessions[i].topSet && sessions[i].topSet.firstRow && sessions[i].topSet.r >= range.repsMin) break
+      const ts = sessions[i].topSet
+      const metLoad = ts && (isAssisted(cfg) ? ts.w <= sessions[i].weight + 0.05 : ts.w >= sessions[i].weight - 0.05)
+      if (ts && ts.firstRow && metLoad && ts.r >= range.repsMin) break
     }
-      if (i < sessions.length -1 && sessions[i].weight !== sessions[i+1].weight) break
+    if (i < sessions.length - 1 && sessions[i].weight !== sessions[i + 1].weight) break
     // So does an edit of the plan (issue #275): misses against the old sets × reps say nothing
     // about the new ones. Only sessions that both carry their plan can show one.
     if (i < sessions.length - 1 && sessions[i].planned && sessions[i + 1].planned && !samePlan(sessions[i].planned, sessions[i + 1].planned)) break

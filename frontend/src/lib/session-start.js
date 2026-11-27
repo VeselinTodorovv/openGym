@@ -5,7 +5,7 @@
 // either imports this file, so there is no cycle.
 import { buildSets, applyIntensifierPlan, modeOf, barFloor, isBw, isPerSide, lastEntryFor, insertWarmupRow, bandClimbReps } from './history.js'
 import { isWarmupRow, isSideSet, syncSideAggregate } from './workout-model.js'
-import { nextPrescription, applyPrescription, defaultIncrement, weightIncrement, plannedOf, deloadTo, DELOAD_FACTOR, sessionsFor, rptBackoffPctOf, rptBackoffModeOf } from './progression.js'
+import { nextPrescription, applyPrescription, defaultIncrement, weightIncrement, plannedOf, deloadTo, DELOAD_FACTOR, sessionsFor, rptBackoffPctOf, rptBackoffModeOf, rptRowWeights } from './progression.js'
 import { dropGrid, backoffGrid } from './plates.js'
 import { backoffStepOf, applyBackoff } from './backoff.js'
 import { dbLoadFor, historyAs, ownedWeightsFor, withMeaning } from './dumbbells.js'
@@ -125,9 +125,14 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
   if (cycle) {
     const lastW = sessionsFor(st, cfg.id, cfg, routine?.id).filter(x => x.mode === 'reps').at(-1)?.weight
     const n = deloadSets(cfg.sets)
+    const deloadW = lastW > 0 ? lastW : plan.weight != null && plan.kind !== 'up' ? plan.weight : cfg.weight > 0 ? cfg.weight : undefined
+    const deloadRows = plan.policy === 'rpt' && deloadW > 0 && !(isBw(cfg) && !(cfg.weight > 0) && !(deloadW > 0))
+      ? rptRowWeights(deloadW, n, cfg, { ...(rptOpts || {}), assisted: isAssisted(cfg) })
+      : null
     plan = {
       policy: plan.policy, kind: 'deloadweek', sets: n,
-      ...(lastW > 0 ? { weight: lastW } : plan.weight != null && plan.kind !== 'up' ? { weight: plan.weight } : cfg.weight > 0 ? { weight: cfg.weight } : {}),
+      ...(deloadW != null ? { weight: deloadW } : {}),
+      ...(deloadRows ? { rowWeights: deloadRows } : {}),
       ...(cfg.reps > 0 ? { reps: cfg.reps } : {}),
       why: ['Deload week: {0} of {1} sets, same weight. Lighter on purpose.', n, Math.max(1, cfg.sets || 1)],
       prog: { deload: true },

@@ -190,7 +190,7 @@ export const SEARCH = [
   // Fine-tuning
   { page: 'advanced', title: 'Deload weeks', icon: 'battery', tint: 'var(--indigo)', kw: 'deload deloading lighter easy week recover rhythm every weeks cycle' },
   { page: 'advanced', title: 'Suggest a deload when I need one', icon: 'sparkles', tint: 'var(--indigo)', kw: 'deload automatic suggest tired fatigue check-in performance' },
-  { page: 'advanced', title: 'Default progression', icon: 'chartLine', tint: 'var(--blue)', kw: 'progression rule default linear off automatic weight increase', opts: ['No automatic progression', 'Linear progression', 'Greyskull LP', 'Double progression', 'Triple progression'] },
+  { page: 'advanced', title: 'Default progression', icon: 'chartLine', tint: 'var(--blue)', kw: 'progression rule default linear off automatic weight increase rpt reverse pyramid backoff', opts: ['No automatic progression', 'Linear progression', 'Greyskull LP', 'Double progression', 'Steady double progression', 'Triple progression', 'Top set & back-offs', 'Undulating days', 'Shorter rests', 'Skill ladder'] },
   { page: 'advanced', title: 'Planned sessions start from', icon: 'clipboard', tint: 'var(--green)', kw: 'start from plan last session reps carry over', opts: ['Your plan', 'Your last session'] },
   { page: 'advanced', title: 'Last time means', icon: 'history', tint: 'var(--indigo)', kw: 'last time previous session history routine workout across every any', opts: ['This routine', 'Any workout'] },
   { page: 'advanced', title: 'Keep timing after target', icon: 'stopwatch', tint: 'var(--orange)', kw: 'timed set overtime hold duration' },

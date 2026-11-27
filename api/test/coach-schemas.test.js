@@ -105,3 +105,19 @@ test('the Gemini request carries responseSchema only when the schema fits its su
   const none = geminiSpec.body({ prompt: 'P', system: null, maxTokens: 100 }).generationConfig;
   assert.equal('responseSchema' in none, false);
 });
+
+test('CREATE_SCHEMA exposes RPT exercise fields in both strictSchema and geminiSchema', () => {
+  const exProps = CREATE_SCHEMA.properties.routines.items.properties.ex.items.properties;
+  assert.deepEqual(exProps.backoffPct, { type: 'integer' });
+  assert.deepEqual(exProps.backoffMode, { type: 'string' });
+  assert.deepEqual(exProps.topMinRir, { type: 'integer' });
+
+  const strictEx = strictSchema(CREATE_SCHEMA).properties.routines.items.properties.ex.items;
+  assert.equal(strictEx.additionalProperties, false);
+  assert.ok('backoffPct' in strictEx.properties && 'backoffMode' in strictEx.properties && 'topMinRir' in strictEx.properties);
+
+  const geminiEx = geminiSchema(CREATE_SCHEMA).properties.routines.items.properties.ex.items.properties;
+  assert.equal(geminiEx.backoffPct.type, 'integer');
+  assert.equal(geminiEx.backoffMode.type, 'string');
+  assert.equal(geminiEx.topMinRir.type, 'integer');
+});
